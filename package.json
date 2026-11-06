@@ -1,0 +1,15 @@
+{
+  "name": "3itter",
+  "version": "2.0.0",
+  "description": "A small social platform styled with Material 3 Expressive.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "admin": "node server/cli.js"
+  }
+}

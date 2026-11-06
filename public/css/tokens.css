@@ -1,0 +1,156 @@
+/* =====================================================================
+   Material 3 Expressive design tokens
+   Colour roles are generated from one seed hue (--h) in OKLCH, so the
+   whole UI re-tints when the user picks a new colour.
+   ===================================================================== */
+
+:root {
+  --h: 285;
+  --h2: calc(var(--h) + 60);   /* tertiary hue */
+  color-scheme: light;
+
+  --md-primary: oklch(0.50 0.19 var(--h));
+  --md-on-primary: oklch(1 0 0);
+  --md-primary-container: oklch(0.91 0.07 var(--h));
+  --md-on-primary-container: oklch(0.32 0.13 var(--h));
+  --md-secondary: oklch(0.50 0.06 var(--h));
+  --md-on-secondary: oklch(1 0 0);
+  --md-secondary-container: oklch(0.915 0.045 var(--h));
+  --md-on-secondary-container: oklch(0.31 0.06 var(--h));
+  --md-tertiary: oklch(0.52 0.15 var(--h2));
+  --md-on-tertiary: oklch(1 0 0);
+  --md-tertiary-container: oklch(0.91 0.08 var(--h2));
+  --md-on-tertiary-container: oklch(0.32 0.12 var(--h2));
+  --md-error: oklch(0.53 0.21 27);
+  --md-on-error: oklch(1 0 0);
+  --md-error-container: oklch(0.92 0.06 25);
+  --md-on-error-container: oklch(0.38 0.15 27);
+
+  --md-surface: oklch(0.985 0.006 var(--h));
+  --md-surface-container-lowest: oklch(1 0 0);
+  --md-surface-container-low: oklch(0.966 0.010 var(--h));
+  --md-surface-container: oklch(0.950 0.013 var(--h));
+  --md-surface-container-high: oklch(0.935 0.015 var(--h));
+  --md-surface-container-highest: oklch(0.915 0.017 var(--h));
+  --md-on-surface: oklch(0.21 0.012 var(--h));
+  --md-on-surface-variant: oklch(0.43 0.02 var(--h));
+  --md-outline: oklch(0.60 0.02 var(--h));
+  --md-outline-variant: oklch(0.86 0.015 var(--h));
+  --md-inverse-surface: oklch(0.30 0.012 var(--h));
+  --md-inverse-on-surface: oklch(0.95 0.008 var(--h));
+  --md-inverse-primary: oklch(0.82 0.11 var(--h));
+  --md-scrim: oklch(0 0 0);
+
+  --like: oklch(0.58 0.22 12);
+  --repost: oklch(0.56 0.14 152);
+
+  /* App-level surfaces */
+  --app-bg: var(--md-surface-container);
+  --app-card: var(--md-surface-container-lowest);
+  --app-card-hover: oklch(0.985 0.008 var(--h));
+
+  /* Shape scale */
+  --md-shape-none: 0;
+  --md-shape-xs: 4px;
+  --md-shape-sm: 8px;
+  --md-shape-md: 12px;
+  --md-shape-lg: 16px;
+  --md-shape-lg-increased: 20px;
+  --md-shape-xl: 28px;
+  --md-shape-xl-increased: 32px;
+  --md-shape-xxl: 48px;
+  --md-shape-full: 9999px;
+
+  /* Elevation */
+  --md-elev-1: 0 1px 2px oklch(0 0 0 / 0.18), 0 1px 3px 1px oklch(0 0 0 / 0.08);
+  --md-elev-2: 0 1px 2px oklch(0 0 0 / 0.18), 0 2px 6px 2px oklch(0 0 0 / 0.08);
+  --md-elev-3: 0 1px 3px oklch(0 0 0 / 0.18), 0 4px 8px 3px oklch(0 0 0 / 0.09);
+  --md-elev-4: 0 2px 3px oklch(0 0 0 / 0.18), 0 6px 10px 4px oklch(0 0 0 / 0.10);
+
+  /* Typography */
+  --md-font: "Roboto Flex", "Roboto", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  /* Motion fallbacks (motion.js replaces these with physics springs) */
+  --md-spring-fast-spatial: cubic-bezier(0.34, 1.5, 0.64, 1);
+  --md-spring-fast-spatial-dur: 350ms;
+  --md-spring-default-spatial: cubic-bezier(0.34, 1.3, 0.64, 1);
+  --md-spring-default-spatial-dur: 500ms;
+  --md-spring-slow-spatial: cubic-bezier(0.34, 1.2, 0.64, 1);
+  --md-spring-slow-spatial-dur: 650ms;
+  --md-spring-fast-effects: cubic-bezier(0.3, 0, 0, 1);
+  --md-spring-fast-effects-dur: 150ms;
+  --md-spring-default-effects: cubic-bezier(0.3, 0, 0, 1);
+  --md-spring-default-effects-dur: 200ms;
+  --md-spring-slow-effects: cubic-bezier(0.3, 0, 0, 1);
+  --md-spring-slow-effects-dur: 300ms;
+
+  /* Shorthands */
+  --t-shape: border-radius var(--md-spring-fast-spatial-dur) var(--md-spring-fast-spatial);
+  --t-color: background-color var(--md-spring-default-effects-dur) var(--md-spring-default-effects),
+             color var(--md-spring-default-effects-dur) var(--md-spring-default-effects),
+             box-shadow var(--md-spring-default-effects-dur) var(--md-spring-default-effects);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --md-primary: oklch(0.82 0.11 var(--h));
+  --md-on-primary: oklch(0.30 0.12 var(--h));
+  --md-primary-container: oklch(0.40 0.14 var(--h));
+  --md-on-primary-container: oklch(0.92 0.06 var(--h));
+  --md-secondary: oklch(0.82 0.045 var(--h));
+  --md-on-secondary: oklch(0.30 0.045 var(--h));
+  --md-secondary-container: oklch(0.37 0.045 var(--h));
+  --md-on-secondary-container: oklch(0.91 0.035 var(--h));
+  --md-tertiary: oklch(0.83 0.10 var(--h2));
+  --md-on-tertiary: oklch(0.31 0.10 var(--h2));
+  --md-tertiary-container: oklch(0.42 0.12 var(--h2));
+  --md-on-tertiary-container: oklch(0.92 0.06 var(--h2));
+  --md-error: oklch(0.80 0.10 25);
+  --md-on-error: oklch(0.32 0.12 27);
+  --md-error-container: oklch(0.42 0.15 27);
+  --md-on-error-container: oklch(0.92 0.05 25);
+
+  --md-surface: oklch(0.17 0.010 var(--h));
+  --md-surface-container-lowest: oklch(0.14 0.008 var(--h));
+  --md-surface-container-low: oklch(0.20 0.012 var(--h));
+  --md-surface-container: oklch(0.22 0.013 var(--h));
+  --md-surface-container-high: oklch(0.255 0.014 var(--h));
+  --md-surface-container-highest: oklch(0.29 0.015 var(--h));
+  --md-on-surface: oklch(0.93 0.01 var(--h));
+  --md-on-surface-variant: oklch(0.80 0.02 var(--h));
+  --md-outline: oklch(0.63 0.02 var(--h));
+  --md-outline-variant: oklch(0.38 0.018 var(--h));
+  --md-inverse-surface: oklch(0.92 0.01 var(--h));
+  --md-inverse-on-surface: oklch(0.28 0.012 var(--h));
+  --md-inverse-primary: oklch(0.50 0.19 var(--h));
+
+  --like: oklch(0.74 0.17 12);
+  --repost: oklch(0.78 0.13 152);
+
+  --app-bg: var(--md-surface);
+  --app-card: var(--md-surface-container);
+  --app-card-hover: oklch(0.235 0.014 var(--h));
+}
+
+/* ---------------------------------------------------------- Type scale */
+.display-large   { font: 400 57px/64px var(--md-font); letter-spacing: -0.25px; }
+.display-medium  { font: 400 45px/52px var(--md-font); }
+.display-small   { font: 400 36px/44px var(--md-font); }
+.headline-large  { font: 400 32px/40px var(--md-font); }
+.headline-medium { font: 400 28px/36px var(--md-font); }
+.headline-small  { font: 400 24px/32px var(--md-font); }
+.title-large     { font: 400 22px/28px var(--md-font); }
+.title-medium    { font: 500 16px/24px var(--md-font); letter-spacing: 0.15px; }
+.title-small     { font: 500 14px/20px var(--md-font); letter-spacing: 0.1px; }
+.body-large      { font: 400 16px/24px var(--md-font); letter-spacing: 0.2px; }
+.body-medium     { font: 400 14px/20px var(--md-font); letter-spacing: 0.2px; }
+.body-small      { font: 400 12px/16px var(--md-font); letter-spacing: 0.3px; }
+.label-large     { font: 500 14px/20px var(--md-font); letter-spacing: 0.1px; }
+.label-medium    { font: 500 12px/16px var(--md-font); letter-spacing: 0.5px; }
+.label-small     { font: 500 11px/16px var(--md-font); letter-spacing: 0.5px; }
+
+/* Emphasized variants: heavier and a touch wider */
+.emph { font-weight: 700; font-stretch: 112%; }
+.display-large.emph, .display-medium.emph, .display-small.emph,
+.headline-large.emph, .headline-medium.emph { font-weight: 800; font-stretch: 120%; letter-spacing: -0.5px; }
+.title-medium.emph, .title-small.emph, .label-large.emph { font-weight: 700; font-stretch: 105%; }

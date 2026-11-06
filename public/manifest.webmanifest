@@ -1,0 +1,50 @@
+{
+  "name": "3itter — Material 3 Twitter",
+  "short_name": "3itter",
+  "description": "A small social platform built with Material 3 Expressive.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f1eff6",
+  "theme_color": "#6b4fd8",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "New post",
+      "url": "/?compose=1"
+    },
+    {
+      "name": "Notifications",
+      "url": "/notifications"
+    },
+    {
+      "name": "Messages",
+      "url": "/messages"
+    }
+  ]
+}
