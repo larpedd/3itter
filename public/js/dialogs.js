@@ -1,4 +1,6 @@
 // Composer, compose dialog, edit-profile dialog and new-message dialog.
+import { t, locale } from './lib/i18n.js';
+import { openCropper } from './cropper.js';
 import { html, el } from './lib/html.js';
 import { api } from './lib/api.js';
 import { SHAPES, SHAPE_LABELS } from './lib/shapes.js';
@@ -35,6 +37,7 @@ export function composer({ replyTo = null, quote = null, onPosted, autofocus = f
           <div class="ac-pop menu" role="listbox" hidden></div>
         </div>
         <div class="composer-images" hidden></div>
+        <div class="composer-video" hidden></div>
         <div class="poll-builder" hidden>
           <div class="pb-options"></div>
           <button type="button" class="btn text xs" data-c="poll-add">${icon('add', 'sm')}Add a choice</button>
@@ -55,6 +58,7 @@ export function composer({ replyTo = null, quote = null, onPosted, autofocus = f
         <div class="composer-bar">
           <div class="toolbar" role="toolbar" aria-label="Post options">
             <button type="button" class="icon-btn" data-c="image" aria-label="Add images">${icon('image')}</button>
+            <button type="button" class="icon-btn" data-c="video" aria-label="Add a video">${icon('movie')}</button>
             <button type="button" class="icon-btn" data-c="poll" aria-label="Add a poll">${icon('ballot')}</button>
             <button type="button" class="icon-btn" data-c="emoji" aria-label="Add emoji">${icon('mood')}</button>
             <button type="button" class="icon-btn" data-c="cw" aria-pressed="false" aria-label="Add content warning">${icon('warning')}</button>
@@ -75,19 +79,22 @@ export function composer({ replyTo = null, quote = null, onPosted, autofocus = f
       </div>
     </div>
     <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
+    <input type="file" class="video-file" accept="video/mp4,video/webm,video/quicktime" hidden>
   </form>`);
 
   const $ = (sel) => form.querySelector(sel);
   const ta = $('textarea');
   const submit = $('[type=submit]');
   const file = $('input[type=file]');
+  const videoFile = $('.video-file');
+  const videoBox = $('.composer-video');
   const imagesBox = $('.composer-images');
   const pollBox = $('.poll-builder');
   const cwBox = $('.cw-input');
   const counter = $('.counter');
   const progress = $('.wavy-progress');
   const ac = $('.ac-pop');
-  const st = { images: [], sensitive: false, cw: false, poll: null, policy: 'everyone', busy: false, scheduleAt: null, thread: [] };
+  const st = { images: [], video: null, sensitive: false, cw: false, poll: null, policy: 'everyone', busy: false, scheduleAt: null, thread: [] };
   const threadBox = $('.thread-extra');
   const scheduleChip = $('.schedule-chip');
 
@@ -105,14 +112,16 @@ export function composer({ replyTo = null, quote = null, onPosted, autofocus = f
     counter.querySelector('.ctr-num').textContent = left <= 20 ? left : '';
     const pollOk = !st.poll || (n > 0 && st.poll.options.filter((o) => o.trim()).length >= 2);
     const threadOk = st.thread.every((t) => [...t.trim()].length <= MAX);
-    submit.disabled = st.busy || left < 0 || (n === 0 && !st.images.length) || !pollOk || !threadOk;
+    const videoOk = !st.video || !!st.video.id;
+    submit.disabled = st.busy || left < 0 || (n === 0 && !st.images.length && !st.video) || !pollOk || !threadOk || !videoOk;
     submit.textContent = st.scheduleAt ? 'Schedule' : replyTo ? 'Reply' : st.thread.some((t) => t.trim()) ? 'Post all' : 'Post';
     const addBtn = form.querySelector('[data-c=thread-add]');
     if (addBtn) addBtn.hidden = !!st.scheduleAt || st.thread.length >= 9;
-    form.querySelector('[data-c=image]').disabled = !!st.poll || st.images.length >= MAX_IMAGES;
-    form.querySelector('[data-c=poll]').disabled = st.images.length > 0;
-    form.querySelector('[data-c=sensitive]').hidden = !st.images.length;
-    form.classList.toggle('active', n > 0 || st.images.length > 0 || !!st.poll || st.cw || document.activeElement === ta);
+    form.querySelector('[data-c=image]').disabled = !!st.poll || !!st.video || st.images.length >= MAX_IMAGES;
+    form.querySelector('[data-c=video]').disabled = !!st.poll || !!st.video || st.images.length > 0;
+    form.querySelector('[data-c=poll]').disabled = st.images.length > 0 || !!st.video;
+    form.querySelector('[data-c=sensitive]').hidden = !st.images.length && !st.video;
+    form.classList.toggle('active', n > 0 || st.images.length > 0 || !!st.video || !!st.poll || st.cw || document.activeElement === ta);
   };
 
   const drawImages = () => {
@@ -136,7 +145,84 @@ export function composer({ replyTo = null, quote = null, onPosted, autofocus = f
     update();
   };
 
+  // ------------------------------------------------ video: uploaded straight away, with progress
+  const drawVideo = () => {
+    const v = st.video;
+    videoBox.hidden = !v;
+    if (!v) { videoBox.innerHTML = ''; return update(); }
+    if (!videoBox.querySelector('video')) {
+      videoBox.innerHTML = String(html`<div class="cv-item">
+        <video src="${v.url}" muted playsinline controls preload="metadata"></video>
+        <button type="button" class="icon-btn sm scrim ci-remove" data-c="remove-video" aria-label="Remove video">${icon('close', 'sm')}</button>
+        <div class="cv-progress"><span></span></div>
+        <div class="cv-status title-small"></div>
+      </div>
+      <input class="ci-alt cv-alt" maxlength="1000" placeholder="Describe this video" aria-label="Video description (alt text)">`);
+      grabPoster(videoBox.querySelector('video'));
+    }
+    const pct = Math.round((v.progress || 0) * 100);
+    videoBox.querySelector('.cv-progress span').style.width = `${v.id ? 100 : pct}%`;
+    videoBox.querySelector('.cv-progress').hidden = !!v.id;
+    videoBox.querySelector('.cv-status').textContent = v.error || (v.id ? '' : `${t('Uploading video…')} ${pct}%`);
+    videoBox.querySelector('.cv-status').hidden = !v.error && !!v.id;
+    update();
+  };
+
+  // The poster frame is taken from the video in the browser, so the server never decodes video.
+  const grabPoster = (video) => {
+    video.addEventListener('loadeddata', () => { video.currentTime = Math.min(0.5, (video.duration || 1) / 2); }, { once: true });
+    video.addEventListener('seeked', () => {
+      if (!st.video || st.video.poster) return;
+      try {
+        const scale = Math.min(1, 1280 / Math.max(video.videoWidth, video.videoHeight));
+        const c = document.createElement('canvas');
+        c.width = Math.round(video.videoWidth * scale);
+        c.height = Math.round(video.videoHeight * scale);
+        c.getContext('2d').drawImage(video, 0, 0, c.width, c.height);
+        st.video.poster = c.toDataURL('image/webp', 0.82);
+        if (!st.video.poster.startsWith('data:image/webp')) st.video.poster = c.toDataURL('image/jpeg', 0.82);
+      } catch { /* no poster: the player shows the first frame instead */ }
+    }, { once: true });
+  };
+
+  const setVideo = (f) => {
+    if (!/^video\/(mp4|webm|quicktime)$/.test(f.type)) return toast(t('Videos must be MP4, WebM or MOV.'));
+    const maxMb = state.instance?.maxVideoMb || 50;
+    if (f.size > maxMb * 1024 * 1024) return toast(t('Videos can be up to {n} MB.', { n: maxMb }));
+    if (st.images.length || st.poll) return toast(t('A post can have a video, images or a poll, but only one of them.'));
+    const v = { file: f, url: URL.createObjectURL(f), progress: 0, id: null, poster: null, alt: '' };
+    st.video = v;
+    drawVideo();
+    const xhr = new XMLHttpRequest();
+    v.xhr = xhr;
+    xhr.open('POST', '/api/media/video');
+    xhr.setRequestHeader('Content-Type', f.type);
+    try { const c = localStorage.getItem('3itter-client'); if (c) xhr.setRequestHeader('X-3itter-Client', c); } catch { /* ignore */ }
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable && st.video === v) { v.progress = e.loaded / e.total; drawVideo(); } };
+    xhr.onload = () => {
+      if (st.video !== v) return;
+      let data = {};
+      try { data = JSON.parse(xhr.responseText); } catch { /* ignore */ }
+      if (xhr.status >= 200 && xhr.status < 300 && data.video) { v.id = data.video.id; v.error = null; }
+      else v.error = data.error || t('Upload failed. Try again.');
+      drawVideo();
+    };
+    xhr.onerror = () => { if (st.video === v) { v.error = t('Upload failed. Try again.'); drawVideo(); } };
+    xhr.send(f);
+  };
+
+  const clearVideo = () => {
+    if (!st.video) return;
+    st.video.xhr?.abort();
+    URL.revokeObjectURL(st.video.url);
+    st.video = null;
+    videoBox.innerHTML = '';
+    drawVideo();
+  };
+
   const addFiles = async (files) => {
+    const vid = [...files].find((f) => f.type.startsWith('video/'));
+    if (vid) return setVideo(vid);
     for (const f of [...files]) {
       if (st.images.length >= MAX_IMAGES) { toast(`You can add up to ${MAX_IMAGES} images.`); break; }
       if (!f.type.startsWith('image/')) continue;
@@ -225,7 +311,7 @@ export function composer({ replyTo = null, quote = null, onPosted, autofocus = f
     if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !submit.disabled) form.requestSubmit();
   });
   ta.addEventListener('paste', (e) => {
-    const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/'));
+    const files = [...(e.clipboardData?.files || [])].filter((f) => f.type.startsWith('image/') || f.type.startsWith('video/'));
     if (files.length && !st.poll) { e.preventDefault(); addFiles(files); }
   });
   form.addEventListener('dragover', (e) => { if ([...(e.dataTransfer?.items || [])].some((i) => i.kind === 'file')) { e.preventDefault(); form.classList.add('drop'); } });
@@ -233,6 +319,7 @@ export function composer({ replyTo = null, quote = null, onPosted, autofocus = f
   form.addEventListener('drop', (e) => { e.preventDefault(); form.classList.remove('drop'); if (!st.poll) addFiles(e.dataTransfer.files); });
 
   form.addEventListener('input', (e) => {
+    if (e.target.matches('.cv-alt')) { if (st.video) st.video.alt = e.target.value; return; }
     if (e.target.matches('.ci-alt')) st.images[Number(e.target.dataset.i)].alt = e.target.value;
     if (e.target.matches('[data-opt]')) { st.poll.options[Number(e.target.dataset.opt)] = e.target.value; update(); }
   });
@@ -244,6 +331,8 @@ export function composer({ replyTo = null, quote = null, onPosted, autofocus = f
     if (!btn || btn.disabled) return;
     const c = btn.dataset.c;
     if (c === 'image') file.click();
+    if (c === 'video') videoFile.click();
+    if (c === 'remove-video') { clearVideo(); st.sensitive = false; pressed('sensitive', false); }
     if (c === 'remove-image') { st.images.splice(Number(btn.dataset.i), 1); if (!st.images.length) { st.sensitive = false; pressed('sensitive', false); } drawImages(); }
     if (c === 'sensitive') { st.sensitive = !st.sensitive; pressed('sensitive', st.sensitive); toast(st.sensitive ? 'Images will be blurred until tapped' : 'Images won’t be blurred'); }
     if (c === 'cw') {
@@ -301,6 +390,7 @@ export function composer({ replyTo = null, quote = null, onPosted, autofocus = f
   });
 
   file.addEventListener('change', () => { const files = file.files; addFiles(files).then(() => { file.value = ''; }); });
+  videoFile.addEventListener('change', () => { const f = videoFile.files[0]; videoFile.value = ''; if (f) setVideo(f); });
 
   const drawThread = () => {
     threadBox.innerHTML = String(html`${st.thread.map((t, i) => html`<div class="thread-item">
@@ -323,7 +413,7 @@ export function composer({ replyTo = null, quote = null, onPosted, autofocus = f
     pressed('schedule', !!t);
     scheduleChip.hidden = !t;
     if (t) {
-      scheduleChip.querySelector('.sc-text').textContent = `Will post ${new Date(t).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`;
+      scheduleChip.querySelector('.sc-text').textContent = `Will post ${new Date(t).toLocaleString(locale(), { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`;
       if (st.thread.length) { st.thread = []; drawThread(); toast('Threads can’t be scheduled, so the extra posts were removed.'); }
     }
     update();
@@ -335,6 +425,7 @@ export function composer({ replyTo = null, quote = null, onPosted, autofocus = f
     if (st.scheduleAt) setSchedule(null);
     clearTimeout(draftTimer);
     try { localStorage.removeItem(draftKey); } catch { /* ignore */ }
+    if (st.video) { URL.revokeObjectURL(st.video.url); st.video = null; videoBox.innerHTML = ''; drawVideo(); }
     Object.assign(st, { images: [], sensitive: false, cw: false, poll: null });
     pressed('sensitive', false); pressed('cw', false);
     cwBox.hidden = true; cwBox.querySelector('input').value = '';
@@ -349,6 +440,7 @@ export function composer({ replyTo = null, quote = null, onPosted, autofocus = f
       const body = {
         text: ta.value,
         images: st.images.length ? st.images.map((im) => ({ data: im.data, alt: im.alt })) : undefined,
+        video: st.video ? { id: st.video.id, poster: st.video.poster || undefined, alt: st.video.alt } : undefined,
         sensitive: st.sensitive || undefined,
         cw: st.cw ? cwBox.querySelector('input').value : undefined,
         poll: st.poll ? { options: st.poll.options.filter((o) => o.trim()), durationHours: st.poll.hours, multiple: st.poll.multiple } : undefined,
@@ -358,7 +450,7 @@ export function composer({ replyTo = null, quote = null, onPosted, autofocus = f
       if (st.scheduleAt) {
         const { scheduled } = await api('/scheduled', { method: 'POST', body: { ...body, publishAt: st.scheduleAt } });
         reset();
-        toast(`Scheduled for ${new Date(scheduled.publishAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`,
+        toast(`Scheduled for ${new Date(scheduled.publishAt).toLocaleString(locale(), { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`,
           { action: 'View', onAction: () => emit('navigate', '/scheduled') });
         onPosted?.(null, { scheduled });
         return;
@@ -369,6 +461,7 @@ export function composer({ replyTo = null, quote = null, onPosted, autofocus = f
         body: {
           text: ta.value,
           images: st.images.length ? st.images.map((im) => ({ data: im.data, alt: im.alt })) : undefined,
+          video: st.video ? { id: st.video.id, poster: st.video.poster || undefined, alt: st.video.alt } : undefined,
           sensitive: st.sensitive || undefined,
           cw: st.cw ? cwBox.querySelector('input').value : undefined,
           poll: st.poll ? { options: st.poll.options.filter((o) => o.trim()), durationHours: st.poll.hours, multiple: st.poll.multiple } : undefined,
@@ -527,8 +620,14 @@ export function openEditProfile() {
     const f = fileInput.files[0];
     fileInput.value = '';
     if (!f || !picking) return;
+    const kind = picking;
     try {
-      const data = await prepareImage(f, picking === 'avatar' ? 512 : 1500);
+      if (!/^image\/(png|jpeg|gif|webp)$/.test(f.type)) throw new Error(t('Use a PNG, JPEG, GIF or WebP image.'));
+      // Crop, zoom and position before uploading.
+      const cropped = await openCropper(f, { kind, shape: draft.avatarShape });
+      if (!cropped) return;
+      const data = cropped.original ? await prepareImage(f, kind === 'avatar' ? 512 : 1500) : cropped;
+      picking = kind;
       files[picking] = data;
       if (picking === 'avatar') av().innerHTML = String(html`<img src="${data}" alt="">`);
       else { banner.querySelector('img')?.remove(); banner.prepend(el(html`<img src="${data}" alt="">`)); }

@@ -1,4 +1,5 @@
 // Admin panel: overview, reports, users, federation, instance settings and audit log.
+import { locale } from './lib/i18n.js';
 import { html, el } from './lib/html.js';
 import { api } from './lib/api.js';
 import { state, emit } from './store.js';
@@ -29,7 +30,7 @@ function barChart(title, rows, key) {
   const max = Math.max(1, ...rows.map((r) => r[key]));
   const nice = max <= 4 ? 4 : Math.ceil(max / 4) * 4;
   const total = rows.reduce((a, r) => a + r[key], 0);
-  const day = (d) => new Date(`${d}T12:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const day = (d) => new Date(`${d}T12:00:00`).toLocaleDateString(locale(), { month: 'short', day: 'numeric' });
   return html`<section class="card chart-card">
     <div class="chart-head"><h3 class="title-medium emph">${title}</h3><span class="setting-sub">${compact(total)} in 14 days</span></div>
     <div class="chart" role="img" aria-label="${title}: ${rows.map((r) => `${day(r.day)} ${r[key]}`).join(', ')}">
@@ -567,7 +568,7 @@ async function announcementsAndInvites(box) {
     const { announcements } = await api('/admin/announcements');
     annList.innerHTML = announcements.length ? String(html`${announcements.map((a) => html`<div class="list-item">
       <span class="li-icon">${icon(a.tone === 'warning' ? 'warning' : a.tone === 'success' ? 'celebration' : 'campaign')}</span>
-      <div class="li-text"><div class="li-head">${a.text}</div><div class="li-sub">${relTime(a.createdAt)} · ${!a.active ? 'ended' : a.expiresAt && a.expiresAt < Date.now() ? 'expired' : a.expiresAt ? `until ${new Date(a.expiresAt).toLocaleDateString()}` : 'until ended'}</div></div>
+      <div class="li-text"><div class="li-head">${a.text}</div><div class="li-sub">${relTime(a.createdAt)} · ${!a.active ? 'ended' : a.expiresAt && a.expiresAt < Date.now() ? 'expired' : a.expiresAt ? `until ${new Date(a.expiresAt).toLocaleDateString(locale())}` : 'until ended'}</div></div>
       ${a.active && (!a.expiresAt || a.expiresAt > Date.now()) ? html`<button class="btn text xs" type="button" data-end-ann="${a.id}">End</button>` : ''}</div>`)}`)
       : String(html`<p class="list-empty">No announcements yet.</p>`);
   };
@@ -578,7 +579,7 @@ async function announcementsAndInvites(box) {
       return html`<div class="list-item${dead ? ' dead' : ''}">
         <span class="li-icon">${icon('key')}</span>
         <div class="li-text"><div class="li-head"><code class="invite-code">${v.code}</code>${v.note ? html` <span class="setting-sub">${v.note}</span>` : ''}</div>
-          <div class="li-sub">${v.uses}/${v.maxUses} used${v.expiresAt ? ` · expires ${new Date(v.expiresAt).toLocaleDateString()}` : ''}${v.revoked ? ' · revoked' : ''}${v.usedBy.length ? ` · ${v.usedBy.map((h) => `@${h}`).join(', ')}` : ''}</div></div>
+          <div class="li-sub">${v.uses}/${v.maxUses} used${v.expiresAt ? ` · expires ${new Date(v.expiresAt).toLocaleDateString(locale())}` : ''}${v.revoked ? ' · revoked' : ''}${v.usedBy.length ? ` · ${v.usedBy.map((h) => `@${h}`).join(', ')}` : ''}</div></div>
         ${dead ? '' : html`<button class="icon-btn" type="button" data-copy-inv="${v.code}" aria-label="Copy code">${icon('content_copy')}</button>
           <button class="btn text xs" type="button" data-revoke-inv="${v.code}">Revoke</button>`}</div>`;
     })}`) : String(html`<p class="list-empty">No invite codes yet.</p>`);

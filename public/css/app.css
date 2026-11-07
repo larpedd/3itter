@@ -33,11 +33,12 @@ h1, h2, h3, p { margin: 0; }
   padding: 12px 0 16px; overflow-y: auto; scrollbar-width: none;
 }
 .brand { display: flex; align-items: center; gap: 12px; height: 64px; padding: 0 12px; text-decoration: none; color: var(--md-on-surface); }
+/* The 3itter logo (public/logo.svg). Shape classes on the element are ignored. */
 .brand-mark {
-  width: 40px; height: 40px; flex: none; background: var(--md-primary);
-  transition: transform var(--md-spring-slow-spatial-dur) var(--md-spring-slow-spatial), clip-path var(--md-spring-default-spatial-dur) var(--md-spring-default-spatial);
+  width: 40px; height: 40px; flex: none; background: url('/logo.svg') center / contain no-repeat; clip-path: none !important;
+  transition: transform var(--md-spring-slow-spatial-dur) var(--md-spring-slow-spatial);
 }
-.brand:hover .brand-mark { transform: rotate(120deg) scale(1.08); }
+.brand:hover .brand-mark { transform: rotate(-14deg) scale(1.1); }
 .brand-name { font: 800 28px/32px var(--md-font); font-stretch: 125%; letter-spacing: -0.5px; }
 .rail-items { display: flex; flex-direction: column; gap: 2px; margin-block: 8px 16px; }
 .rail-fab { align-self: flex-start; margin-inline-start: 4px; min-width: 200px; }
@@ -1111,9 +1112,18 @@ input.datetime { width: 100%; }
 .drawer-counts { display: flex; gap: 16px; margin-top: 8px; font: 400 14px/20px var(--md-font); color: var(--md-on-surface-variant); }
 .drawer-counts a { text-decoration: none; }
 .drawer-counts b { color: var(--md-on-surface); }
-.drawer-accounts { display: flex; gap: 8px; padding: 0 12px 8px; overflow-x: auto; }
-.drawer-acct { display: flex; align-items: center; gap: 6px; padding: 4px 12px 4px 4px; border: 0; border-radius: 20px;
-  background: var(--md-surface-container-high); color: var(--md-on-surface); font: 500 13px/18px var(--md-font); white-space: nowrap; cursor: pointer; }
+/* Other signed-in accounts: a list that never shrinks (the drawer is a column that can overflow). */
+.drawer-me, .drawer-accounts, .drawer-items, .drawer .menu-divider { flex: none; }
+.drawer-accounts { display: flex; flex-direction: column; gap: 2px; padding: 0 0 8px; }
+.drawer-acct { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 8px 12px; border: 0; border-radius: 16px;
+  background: var(--md-surface-container-high); color: var(--md-on-surface); text-align: start; cursor: pointer; transition: var(--t-color), var(--t-shape); }
+.drawer-acct:active { border-radius: 10px; }
+.drawer-acct > .avatar { flex: none; }
+.drawer-acct .da-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.drawer-acct .da-name { font: 600 15px/20px var(--md-font); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drawer-acct .da-name .name { max-width: 100%; }
+.drawer-acct .da-handle { font: 400 13px/18px var(--md-font); color: var(--md-on-surface-variant); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.drawer-acct > .icon { color: var(--md-on-surface-variant); }
 .drawer-items { display: flex; flex-direction: column; gap: 2px; }
 .drawer .rail-item { width: 100%; border: 0; background: transparent; font: 500 16px/24px var(--md-font); cursor: pointer; text-align: start; }
 .drawer .rail-item.danger { color: var(--md-error); }
@@ -1169,3 +1179,64 @@ body.drawer-open { overflow: hidden; }
 .drawer .rail-item[aria-current="page"] { color: var(--md-on-secondary-container); font-weight: 700; }
 @media (max-width: 899px) { .landing .auth-art { margin-bottom: -10px; } }
 @media (max-width: 480px) { .land-top:has(.instance-chip) .brand-name { display: none !important; } .instance-chip { max-width: 180px; } }
+
+/* ---------------------------------------------------------------- v7: language, sessions, post device */
+.post-client { display: inline-flex; align-items: center; gap: 4px; }
+.post-client .icon { font-size: 16px; }
+
+.lang-btn { gap: 6px; }
+.land-top-actions { flex-wrap: wrap; justify-content: flex-end; }
+
+.lang-option { cursor: pointer; gap: 16px; }
+.lang-option input { order: 2; appearance: none; width: 20px; height: 20px; margin: 0; border-radius: 50%; border: 2px solid var(--md-on-surface-variant); flex: none;
+  transition: border-width var(--md-spring-fast-spatial-dur) var(--md-spring-fast-spatial); cursor: pointer; }
+.lang-option input:checked { border: 6px solid var(--md-primary); }
+.lang-option:has(input:checked) { background: var(--md-secondary-container) !important; }
+.lang-option:has(input:focus-visible) { outline: 2px solid var(--md-primary); outline-offset: -2px; }
+
+.settings-link { display: flex; align-items: center; gap: 16px; text-decoration: none; color: inherit; transition: var(--t-color); }
+.settings-link > div { flex: 1; min-width: 0; }
+.settings-link:hover { background: var(--app-card-hover); }
+
+.session { align-items: flex-start; }
+.session .li-sub + .li-sub { margin-top: 2px; }
+.session .btn { align-self: center; flex: none; }
+.session-icon { transition: border-radius var(--md-spring-default-spatial-dur) var(--md-spring-default-spatial); }
+.session.current .session-icon { background: var(--md-primary); color: var(--md-on-primary); border-radius: 30%; }
+.session-place { white-space: nowrap; }
+
+/* ---------------------------------------------------------------- v8: video posts, video composer, image cropper */
+.media-grid.video { display: block; aspect-ratio: auto; }
+.video-cell { position: relative; display: block; width: 100%; padding: 0; background: #000; border-radius: inherit; overflow: hidden; cursor: default; }
+.video-cell video { display: block; width: 100%; max-height: 70vh; background: #000; }
+.media-grid.video.sensitive:not(.revealed) video { filter: blur(28px); }
+
+.composer-video { position: relative; margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.cv-item { position: relative; border-radius: 20px; overflow: hidden; background: #000; }
+.cv-item video { display: block; width: 100%; max-height: 360px; }
+.cv-item .ci-remove { position: absolute; top: 8px; right: 8px; }
+.cv-progress { position: absolute; left: 0; right: 0; bottom: 0; height: 6px; background: rgb(0 0 0 / .35); }
+.cv-progress span { display: block; height: 100%; width: 0; background: var(--md-primary); border-radius: 0 3px 3px 0; transition: width .2s linear; }
+.cv-status { position: absolute; left: 12px; bottom: 14px; padding: 4px 10px; border-radius: 10px; background: rgb(0 0 0 / .6); color: #fff; }
+.cv-alt { width: 100%; }
+
+.cropper-dialog { width: min(560px, 100vw); }
+.cropper { display: flex; flex-direction: column; gap: 14px; }
+.cropper .dialog-head { display: flex; align-items: center; gap: 8px; }
+.cropper .dialog-head h2 { flex: 1; }
+.crop-stage { position: relative; width: 100%; align-self: stretch; height: min(56vh, 420px); border-radius: 24px; overflow: hidden; background: #111; touch-action: none; cursor: grab; outline: none; user-select: none; }
+.crop-stage.banner { height: min(40vh, 300px); }
+.crop-stage.dragging { cursor: grabbing; }
+.crop-stage:focus-visible { box-shadow: 0 0 0 3px var(--md-primary); }
+.crop-img, .crop-lit { position: absolute; left: 0; top: 0; max-width: none; transform-origin: 0 0; pointer-events: none; }
+.crop-img { opacity: .38; }
+.crop-frame { position: absolute; overflow: hidden; pointer-events: none; }
+.crop-stage.banner .crop-frame { border-radius: 14px; }
+.crop-grid { position: absolute; pointer-events: none; opacity: 0; transition: opacity .2s;
+  background: linear-gradient(to right, transparent calc(33.33% - .5px), rgb(255 255 255 / .5) calc(33.33% - .5px) calc(33.33% + .5px), transparent calc(33.33% + .5px) calc(66.66% - .5px), rgb(255 255 255 / .5) calc(66.66% - .5px) calc(66.66% + .5px), transparent calc(66.66% + .5px)),
+              linear-gradient(to bottom, transparent calc(33.33% - .5px), rgb(255 255 255 / .5) calc(33.33% - .5px) calc(33.33% + .5px), transparent calc(33.33% + .5px) calc(66.66% - .5px), rgb(255 255 255 / .5) calc(66.66% - .5px) calc(66.66% + .5px), transparent calc(66.66% + .5px)); }
+.crop-stage.dragging .crop-grid { opacity: 1; }
+.crop-stage.avatar .crop-grid { display: none; }
+.crop-tools { display: flex; align-items: center; gap: 6px; }
+.crop-tools .crop-zoom { flex: 1; }
+.crop-hint { margin: 0; }

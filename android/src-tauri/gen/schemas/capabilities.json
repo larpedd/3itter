@@ -1,1 +1,0 @@
-{"default":{"identifier":"default","description":"The app only needs a window; instances are ordinary web pages.","local":true,"windows":["main"],"permissions":["core:default"]}}

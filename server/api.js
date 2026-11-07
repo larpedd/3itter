@@ -3,11 +3,15 @@ import crypto from 'node:crypto';
 import { all, get, run, tx } from './db.js';
 import { findBlocked, isReservedHandle, filterConfig, categoriesFor, reasonLabel } from './wordfilter.js';
 import { fail, route } from './http.js';
+import { LANGS, CLIENTS, detectLanguage, countryOf, clientOf } from './locale.js';
+import { prepareVideo, markVideoUsed, MAX_VIDEO_BYTES } from './media.js';
+import { forYouIds } from './feed.js';
+import { publish } from './realtime.js';
 import {
   DOMAIN, VERSION, ADMIN_HANDLE, PAGE, MAX_POST_LEN, MAX_IMAGES, EDIT_WINDOW_MS, REPLY_POLICIES, canReplyTo, parsePollInput, MAX_MSG_LEN, SHAPES, NOTIF_TYPES, REPORT_REASONS, HANDLE_RE, HASHTAG_RE,
   instance, isStaff, audit, hashPassword, verifyPassword, validatePassword, createSession, clearSession, browserAccounts, switchAccount, MAX_ACCOUNTS, sessionId, rateLimit, clientIp,
   saveImage, str, intParam, normalizeWebsite, userByHandle, livePost, isBlockedBetween, hiddenIds,
-  cleanFlags, publicUser, selfUser, miniUser, loadPosts, itemsToFeed, notify, notifyMentions, softDeletePost,
+  cleanFlags, publicUser, selfUser, miniUser, loadPosts, itemsToFeed, notify, notifyMentions, publishMessage, softDeletePost,
 } from './core.js';
 import {
   federatePost, federatePostUpdate, federateVote, federateDelete, federateInteraction, federateFollow, federateUserUpdate, federateUserDelete,
@@ -29,9 +33,10 @@ async function resolveUser(handle, me) {
 
 // ---------------------------------------------------------------- instance (public)
 
-route('GET', '/api/instance', () => {
+route('GET', '/api/instance', ({ req }) => {
   const i = instance();
   return {
+    detectedLanguage: detectLanguage(req), country: countryOf(req), languages: LANGS, maxVideoMb: MAX_VIDEO_BYTES / 1024 / 1024,
     name: i.name, description: i.description, domain: DOMAIN, version: VERSION,
     registrationsOpen: i.registrationsOpen, federationEnabled: i.federationEnabled,
     contactEmail: i.contactEmail, rules: i.rules.split('\n').map((r) => r.trim()).filter(Boolean), minAge: i.minAge,
@@ -71,9 +76,10 @@ route('POST', '/api/auth/signup', async ({ req, res, body }) => {
   const hash = await hashPassword(password);
   // The first real account administers the instance (or only ADMIN_HANDLE, when configured).
   const role = !hasAdmin && (!ADMIN_HANDLE || handle.toLowerCase() === ADMIN_HANDLE) ? 'admin' : 'user';
-  const r = run(`INSERT INTO users (handle, name, password_hash, avatar_shape, hue, role, created_at)
-                 VALUES (:handle, :name, :hash, :shape, :hue, :role, :t)`,
-  { handle, name, hash, shape: SHAPES[crypto.randomInt(SHAPES.length)], hue: crypto.randomInt(360), role, t: Date.now() });
+  const r = run(`INSERT INTO users (handle, name, password_hash, avatar_shape, hue, role, created_at, language)
+                 VALUES (:handle, :name, :hash, :shape, :hue, :role, :t, :lang)`,
+  { handle, name, hash, shape: SHAPES[crypto.randomInt(SHAPES.length)], hue: crypto.randomInt(360), role, t: Date.now(),
+    lang: LANGS.includes(body.language) ? body.language : null });
   const id = Number(r.lastInsertRowid);
   if (invite) {
     run('UPDATE invites SET uses = uses + 1 WHERE code = :c', { c: invite.code });
@@ -153,6 +159,11 @@ route('PATCH', '/api/me', ({ me, body }) => {
     u.dm_policy = body.dmPolicy;
   }
   if ('discoverable' in body) u.discoverable = body.discoverable ? 1 : 0;
+  if ('showClient' in body) u.show_client = body.showClient ? 1 : 0;
+  if ('language' in body) {
+    if (body.language !== null && !LANGS.includes(body.language)) fail(400, 'Unknown language.');
+    u.language = body.language;
+  }
   if ('mutedWords' in body) {
     if (!Array.isArray(body.mutedWords)) fail(400, 'Muted words must be a list.');
     const words = [...new Set(body.mutedWords.map((w) => String(w ?? '').trim().toLowerCase()).filter(Boolean))];
@@ -167,10 +178,10 @@ route('PATCH', '/api/me', ({ me, body }) => {
   }
   run(`UPDATE users SET name = :name, bio = :bio, location = :location, website = :website, avatar_shape = :shape, hue = :hue,
          avatar = :avatar, banner = :banner, dm_policy = :dm, discoverable = :disc, notif_prefs = :prefs,
-         pronouns = :pronouns, flags = :flags, muted_words = :words WHERE id = :id`,
+         pronouns = :pronouns, flags = :flags, muted_words = :words, language = :lang, show_client = :sc WHERE id = :id`,
   { name: u.name, bio: u.bio, location: u.location, website: u.website, shape: u.avatar_shape, hue: u.hue,
     avatar: u.avatar, banner: u.banner, dm: u.dm_policy, disc: u.discoverable, prefs: u.notif_prefs,
-    pronouns: u.pronouns, flags: u.flags, words: u.muted_words, id: me.id });
+    pronouns: u.pronouns, flags: u.flags, words: u.muted_words, lang: u.language ?? null, sc: u.show_client ?? 1, id: me.id });
   const fresh = get('SELECT * FROM users WHERE id = :id', { id: me.id });
   if (profileChanged) federateUserUpdate(fresh);
   return { user: selfUser(fresh) };
@@ -186,10 +197,12 @@ route('POST', '/api/me/password', async ({ me, body, session }) => {
 });
 
 route('GET', '/api/me/sessions', ({ me, session }) => ({
-  sessions: all('SELECT token, created_at, last_used, user_agent, ip FROM sessions WHERE user_id = :id AND expires_at > :now ORDER BY last_used DESC',
-    { id: me.id, now: Date.now() }).map((s) => ({
+  sessions: all(`SELECT token, created_at, last_used, expires_at, user_agent, ip, country, client FROM sessions
+                 WHERE user_id = :id AND expires_at > :now ORDER BY token = :cur DESC, last_used DESC`,
+  { id: me.id, now: Date.now(), cur: session.tokenHash }).map((s) => ({
     id: sessionId(s.token), current: s.token === session.tokenHash,
-    createdAt: s.created_at, lastUsed: s.last_used, userAgent: s.user_agent, ip: s.ip,
+    createdAt: s.created_at, lastUsed: s.last_used, expiresAt: s.expires_at, userAgent: s.user_agent, ip: s.ip,
+    country: s.country || null, client: s.client || null,
   })),
 }));
 
@@ -284,20 +297,9 @@ route('GET', '/api/timeline', ({ me, query }) => {
       ) ORDER BY t DESC LIMIT :limit OFFSET :offset`, { me: me.id, limit: PAGE, offset });
     return { posts: itemsToFeed(items, me.id), next: items.length === PAGE ? offset + PAGE : null };
   }
-  // "For you": engagement weighted by recency over recent candidates.
-  const now = Date.now();
-  const rows = all(`
-    SELECT p.id, p.created_at,
-      MAX((SELECT COUNT(*) FROM likes WHERE post_id = p.id), COALESCE(p.fed_likes, 0)) AS l,
-      MAX((SELECT COUNT(*) FROM reposts WHERE post_id = p.id), COALESCE(p.fed_reposts, 0)) AS r,
-      (SELECT COUNT(*) FROM posts c WHERE c.reply_to = p.id AND c.deleted = 0) AS c
-    FROM posts p JOIN users u ON u.id = p.author_id
-    WHERE p.deleted = 0 AND p.reply_to IS NULL AND u.suspended = 0 AND u.deleted_at IS NULL
-    ORDER BY p.created_at DESC LIMIT 1000`);
-  const ranked = rows.map((r) => ({ id: r.id, s: (r.l + 2 * r.r + 1.5 * r.c + 1) / ((now - r.created_at) / 3600_000 + 2) ** 1.3 }))
-    .sort((a, b) => b.s - a.s);
-  const slice = ranked.slice(offset, offset + PAGE).map((r) => r.id);
-  return { posts: loadPosts(slice, me.id).filter((p) => !p.deleted), next: offset + PAGE < ranked.length ? offset + PAGE : null };
+  // "For you": personalised ranking, see feed.js.
+  const { ids, next } = forYouIds(me.id, offset, PAGE);
+  return { posts: loadPosts(ids, me.id).filter((p) => !p.deleted), next };
 });
 
 route('GET', '/api/timeline/new', ({ me, query }) => {
@@ -332,9 +334,11 @@ export function preparePost(me, body, { allowReply = true } = {}) {
   if (rawImages.length > MAX_IMAGES) fail(400, `You can attach up to ${MAX_IMAGES} images.`);
   const poll = body.poll ? parsePollInput(body.poll) : null;
   if (poll && rawImages.length) fail(400, 'A post can have images or a poll, not both.');
+  const wantsVideo = !!(body.video || body.savedVideo);
+  if (wantsVideo && (rawImages.length || poll)) fail(400, 'A post can have a video, images or a poll, but only one of them.');
   const replyPolicy = body.replyPolicy ?? 'everyone';
   if (!REPLY_POLICIES.includes(replyPolicy)) fail(400, 'Unknown reply setting.');
-  if (!text && !rawImages.length) fail(400, 'Write something first.');
+  if (!text && !rawImages.length && !wantsVideo) fail(400, 'Write something first.');
   if (poll && !text) fail(400, 'Ask a question for your poll.');
   const postCats = categoriesFor(filterConfig().posts);
   if (postCats.length) {
@@ -354,17 +358,21 @@ export function preparePost(me, body, { allowReply = true } = {}) {
     src: saveImage(img?.data),
     alt: str(img?.alt, { name: 'Image description', max: 1000 }),
   }));
-  return { text, cw, images, poll, replyPolicy, replyTo, quoteOf, sensitive: !!body.sensitive && images.length > 0 };
+  const video = prepareVideo(me, body.video, body.savedVideo || null);
+  return { text, cw, images, video, poll, replyPolicy, replyTo, quoteOf, sensitive: !!body.sensitive && (images.length > 0 || !!video) };
 }
 
 export function insertPost(me, p) {
   const id = tx(() => {
-    const r = run(`INSERT INTO posts (author_id, text, image, images, sensitive, cw, reply_policy, reply_to, quote_of, created_at)
-                   VALUES (:a, :text, :image, :images, :sensitive, :cw, :policy, :reply, :quote, :t)`,
+    const r = run(`INSERT INTO posts (author_id, text, image, images, video, sensitive, cw, reply_policy, reply_to, quote_of, created_at, client)
+                   VALUES (:a, :text, :image, :images, :video, :sensitive, :cw, :policy, :reply, :quote, :t, :client)`,
     { a: me.id, text: p.text, image: p.images[0]?.src ?? null, images: p.images.length ? JSON.stringify(p.images) : null,
+      video: p.video ? JSON.stringify({ src: p.video.src, poster: p.video.poster, alt: p.video.alt }) : null,
       sensitive: p.sensitive ? 1 : 0, cw: p.cw, policy: p.replyPolicy,
-      reply: p.replyTo?.id ?? null, quote: p.quoteOf?.id ?? null, t: Date.now() });
+      reply: p.replyTo?.id ?? null, quote: p.quoteOf?.id ?? null, t: Date.now(),
+      client: me.show_client !== 0 && CLIENTS.includes(p.client) ? p.client : null });
     const pid = Number(r.lastInsertRowid);
+    if (p.video) markVideoUsed(p.video.mediaId, pid);
     if (p.poll) {
       run('INSERT INTO polls (post_id, options, multiple, ends_at) VALUES (:p, :o, :m, :e)',
         { p: pid, o: JSON.stringify(p.poll.options), m: p.poll.multiple ? 1 : 0, e: p.poll.endsAt });
@@ -379,10 +387,10 @@ export function insertPost(me, p) {
   return id;
 }
 
-route('POST', '/api/posts', ({ me, body }) => {
+route('POST', '/api/posts', ({ req, me, body }) => {
   rateLimit(`post:${me.id}`, 60, 10 * 60_000);
   if (body.scheduleAt) fail(400, 'Use /api/scheduled to schedule posts.');
-  const id = insertPost(me, preparePost(me, body));
+  const id = insertPost(me, { ...preparePost(me, body), client: clientOf(req) });
   return { post: loadPosts([id], me.id)[0] };
 });
 
@@ -563,7 +571,7 @@ route('GET', '/api/users/:handle/posts', async ({ me, params, query }) => {
     items = all(`SELECT id AS pid, NULL AS rby FROM posts WHERE author_id = :id AND deleted = 0 AND reply_to IS NOT NULL
                  ORDER BY created_at DESC LIMIT :limit OFFSET :offset`, p);
   } else if (tab === 'media') {
-    items = all(`SELECT id AS pid, NULL AS rby FROM posts WHERE author_id = :id AND deleted = 0 AND image IS NOT NULL
+    items = all(`SELECT id AS pid, NULL AS rby FROM posts WHERE author_id = :id AND deleted = 0 AND (image IS NOT NULL OR video IS NOT NULL)
                  ORDER BY created_at DESC LIMIT :limit OFFSET :offset`, p);
   } else if (tab === 'likes') {
     items = all(`SELECT l.post_id AS pid, NULL AS rby FROM likes l JOIN posts x ON x.id = l.post_id
@@ -670,7 +678,9 @@ function searchQuery(q, mediaOnly) {
                      OR p.text LIKE ${p(`%@${likeEscape(val)}%`)} ESCAPE '\\')`);
       } else if (key.toLowerCase() === 'has') {
         const h = val.toLowerCase();
-        if (h === 'media' || h === 'images' || h === 'image') where.push('p.image IS NOT NULL');
+        if (h === 'media') where.push('(p.image IS NOT NULL OR p.video IS NOT NULL)');
+        else if (h === 'images' || h === 'image') where.push('p.image IS NOT NULL');
+        else if (h === 'video' || h === 'videos') where.push('p.video IS NOT NULL');
         else if (h === 'poll') where.push('EXISTS (SELECT 1 FROM polls WHERE post_id = p.id)');
         else if (h === 'links' || h === 'link') where.push("p.text LIKE '%http%'");
       } else {
@@ -684,7 +694,7 @@ function searchQuery(q, mediaOnly) {
     if (neg) hasOperators = true;
     where.push(`p.text ${neg ? 'NOT ' : ''}LIKE ${p(`%${likeEscape(term)}%`)} ESCAPE '\\'`);
   }
-  if (mediaOnly) where.push('p.image IS NOT NULL');
+  if (mediaOnly) where.push('(p.image IS NOT NULL OR p.video IS NOT NULL)');
   return { sql: where.length ? where.join(' AND ') : '1 = 1', params, hasOperators };
 }
 
@@ -805,6 +815,7 @@ route('GET', '/api/notifications', ({ me, query }) => {
 
 route('POST', '/api/notifications/read', ({ me }) => {
   run('UPDATE notifications SET read = 1 WHERE user_id = :me AND read = 0', { me: me.id });
+  publish(me.id, 'read', { what: 'notifications' });
   return { ok: true };
 });
 
@@ -865,7 +876,7 @@ route('GET', '/api/conversations/:handle', async ({ me, params, query }) => {
       SELECT * FROM messages WHERE id > :after AND
         ((sender_id = :me AND recipient_id = :id) OR (sender_id = :id AND recipient_id = :me))
       ORDER BY id DESC LIMIT 200) ORDER BY id ASC`, { me: me.id, id: u.id, after });
-  run('UPDATE messages SET read = 1 WHERE sender_id = :id AND recipient_id = :me AND read = 0', { me: me.id, id: u.id });
+  if (run('UPDATE messages SET read = 1 WHERE sender_id = :id AND recipient_id = :me AND read = 0', { me: me.id, id: u.id }).changes) publish(me.id, 'read', { what: 'messages' });
   return { user: publicUser(u, me.id), messages: rows.map((m) => msgOut(m, me)), blockedReason: canMessage(me, u) };
 });
 
@@ -885,6 +896,7 @@ route('POST', '/api/conversations/:handle', async ({ me, params, body }) => {
   const r = run('INSERT INTO messages (sender_id, recipient_id, text, read, created_at) VALUES (:me, :id, :text, :read, :t)',
     { me: me.id, id: u.id, text, read: u.domain ? 1 : 0, t: Date.now() });
   federateMessage(me, u, text);
+  if (!u.domain) publishMessage(u.id, me.id, text);
   return { message: msgOut(get('SELECT * FROM messages WHERE id = :id', { id: Number(r.lastInsertRowid) }), me) };
 });
 

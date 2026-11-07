@@ -1,0 +1,64 @@
+// Material 3 Expressive tokens for the native client. The colour roles are generated in Rust from the
+// same OKLCH formulas as the web app (public/css/tokens.css), so both clients share one palette.
+import { Palette } from "std-widgets.slint";
+
+export global Theme {
+    // Filled in from Rust: one list per colour scheme, in the order of the roles below.
+    in property <[color]> light;
+    in property <[color]> dark;
+    out property <bool> is-dark: Palette.color-scheme == ColorScheme.dark;
+    property <[color]> s: is-dark ? dark : light;
+
+    out property <color> primary: s[0];
+    out property <color> on-primary: s[1];
+    out property <color> primary-container: s[2];
+    out property <color> on-primary-container: s[3];
+    out property <color> secondary-container: s[4];
+    out property <color> on-secondary-container: s[5];
+    out property <color> surface: s[6];
+    out property <color> surface-low: s[7];
+    out property <color> surface-container: s[8];
+    out property <color> surface-high: s[9];
+    out property <color> surface-highest: s[10];
+    out property <color> on-surface: s[11];
+    out property <color> on-surface-variant: s[12];
+    out property <color> outline: s[13];
+    out property <color> outline-variant: s[14];
+    out property <color> error: s[15];
+    out property <color> tertiary: s[16];
+    out property <color> tertiary-container: s[17];
+    out property <color> on-tertiary-container: s[18];
+    out property <color> inverse-surface: s[19];
+    out property <color> inverse-on-surface: s[20];
+    out property <color> like: s[21];
+    out property <color> repost: s[22];
+    out property <color> card: is-dark ? s[8] : #ffffff;
+
+    // Spring-like easing curves (Material 3 Expressive "spatial" and "effects" springs).
+    out property <duration> fast: 220ms;
+    out property <duration> default: 380ms;
+}
+
+export global Type {
+    out property <length> display: 40px;
+    out property <length> headline: 28px;
+    out property <length> title-large: 22px;
+    out property <length> title: 16px;
+    out property <length> body: 15px;
+    out property <length> label: 13px;
+    out property <length> small: 12px;
+}
+
+// UI translations, shared with the website (strings come from <instance>/js/i18n/strings.js).
+export global I18n {
+    in property <int> rev;
+    pure callback lookup(string, int) -> string;
+    pure callback lookup1(string, string, int) -> string;
+    public pure function t(s: string) -> string {
+        return lookup(s, rev);
+    }
+    // Translate, then fill the text's single {placeholder} with `value`.
+    public pure function t1(s: string, value: string) -> string {
+        return lookup1(s, value, rev);
+    }
+}

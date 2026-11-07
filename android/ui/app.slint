@@ -1,0 +1,1265 @@
+// 3itter for Android: native screens. All data and actions go through the AppState global,
+// which the Rust side (src/app.rs) fills in and listens to.
+import { LineEdit, TextEdit, ListView, ScrollView, Switch, CheckBox, Spinner } from "std-widgets.slint";
+import { Theme, Type, I18n } from "theme.slint";
+import {
+    Author, Post, Icon, IconButton, Button, Chip, Avatar, Verified, Divider, PostCard, TopBar, NavItem,
+    EmptyState, Loading, BrandMark,
+} from "components.slint";
+
+export { Theme, I18n, Author, Post }
+
+export struct SavedInstance { url: string, name: string, domain: string }
+export struct Notif { id: int, icon: string, kind: string, text: string, snippet: string, time: string, post-id: int, handle: string, author: Author, more: int, unread: bool }
+export struct Conv { author: Author, last: string, time: string, unread: int }
+export struct Message { id: int, text: string, mine: bool, time: string, seen: bool }
+export struct UserRow { author: Author, bio: string, following: bool, follows-you: bool, is-me: bool }
+export struct Trend { tag: string, count: string }
+export struct Session { id: string, title: string, sub: string, detail: string, icon: string, current: bool }
+export struct Lang { code: string, name: string, sub: string }
+export struct SheetItem { icon: string, label: string, danger: bool }
+export struct Profile {
+    author: Author,
+    bio: string,
+    location: string,
+    website: string,
+    joined: string,
+    followers: int,
+    following: int,
+    posts: int,
+    is-me: bool,
+    is-following: bool,
+    follows-you: bool,
+    blocked: bool,
+    banner: image,
+    banner-color: color,
+}
+
+export global AppState {
+    // where we are
+    in-out property <string> screen: "loading";   // loading | instance | auth | main
+    in-out property <string> page: "home";        // home | explore | notifications | messages | profile | post | chat | compose | settings | sessions | language
+    in-out property <string> toast;
+    in-out property <string> error;
+    in-out property <bool> busy;
+    in-out property <length> top-inset;
+
+    // instance & account
+    in-out property <string> instance-name: "3itter";
+    in-out property <string> instance-domain;
+    in-out property <bool> registrations-open: true;
+    in-out property <[SavedInstance]> instances;
+    in-out property <string> auth-mode: "login";
+    in-out property <Author> me;
+    in-out property <int> badge-notifications;
+    in-out property <int> badge-messages;
+
+    // timelines
+    in-out property <[Post]> feed;
+    in-out property <string> feed-kind: "foryou";
+    in-out property <bool> feed-loading;
+    in-out property <[Post]> thread;
+    in-out property <int> thread-main: -1;
+    in-out property <[Post]> replies;
+    in-out property <bool> thread-loading;
+    in-out property <[Notif]> notifications;
+    in-out property <string> notif-filter: "all";
+    in-out property <bool> notif-loading;
+    in-out property <[Conv]> conversations;
+    in-out property <bool> conv-loading;
+    in-out property <[Message]> chat;
+    in-out property <Author> chat-with;
+    in-out property <string> chat-blocked;
+    in-out property <string> query;
+    in-out property <string> search-type: "posts";
+    in-out property <[Post]> search-posts;
+    in-out property <[UserRow]> search-users;
+    in-out property <[Trend]> trends;
+    in-out property <[UserRow]> suggestions;
+    in-out property <bool> search-loading;
+    in-out property <Profile> profile;
+    in-out property <[Post]> profile-posts;
+    in-out property <string> profile-tab: "posts";
+    in-out property <bool> profile-loading;
+
+    // composer
+    in-out property <string> compose-text;
+    in-out property <string> compose-context;   // "Replying to @x" / "Quoting @x"
+    in-out property <int> max-post: 500;
+
+    // bottom sheet (post menu, confirmations)
+    in-out property <string> sheet-title;
+    in-out property <[SheetItem]> sheet;
+    callback sheet-pick(int);
+
+    // settings
+    in-out property <[Session]> sessions;
+    in-out property <[Lang]> languages;
+    in-out property <string> language;          // "" = automatic
+    in-out property <string> language-auto;     // e.g. "Automatic · Polski"
+    in-out property <bool> show-client: true;
+    in-out property <string> version;
+
+    // instance & auth
+    callback connect(string);
+    callback open-instance(string);
+    callback forget-instance(string);
+    callback switch-instance();
+    callback login(string, string);
+    callback signup(string, string, string);
+    callback logout();
+
+    // navigation
+    callback navigate(string);
+    callback back();
+    callback refresh();
+    callback load-more(string);
+    callback open-post(int);
+    callback open-user(string);
+    callback open-chat(string);
+    callback open-tag(string);
+
+    // post actions
+    callback like(int);
+    callback repost(int);
+    callback bookmark(int);
+    callback reply-to(int);
+    callback quote(int);
+    callback post-menu(int);
+    callback share(int);
+    callback compose();
+    callback submit-post(string);
+    callback quick-reply(string);
+
+    // people, search, messages
+    callback follow(string);
+    callback search(string, string);
+    callback set-feed(string);
+    callback set-notif-filter(string);
+    callback set-profile-tab(string);
+    callback send-message(string);
+
+    // settings
+    callback set-language(string);
+    callback set-show-client(bool);
+    callback revoke-session(string);
+    callback revoke-others();
+}
+
+// ------------------------------------------------------------------ shared bits
+
+component Field inherits VerticalLayout {
+    in property <string> label;
+    in property <string> hint;
+    in-out property <string> text <=> edit.text;
+    in property <InputType> input-type: InputType.text;
+    callback accepted();
+    spacing: 4px;
+    edit := LineEdit {
+        placeholder-text: label;
+        input-type: root.input-type;
+        accepted => { root.accepted(); }
+    }
+    if hint != "": Text { text: hint; font-size: Type.small; color: Theme.on-surface-variant; }
+    public function focus-field() { edit.focus(); }
+}
+
+component SectionTitle inherits Text {
+    font-size: Type.title + 2px;
+    font-weight: 800;
+    color: Theme.on-surface;
+}
+
+component ListRow inherits Rectangle {
+    in property <string> icon;
+    in property <string> title;
+    in property <string> subtitle;
+    in property <bool> first: true;
+    in property <bool> last: true;
+    in property <bool> chevron: true;
+    in property <bool> danger;
+    in property <bool> selected;
+    in property <length> trailing: chevron ? 32px : 0px;   // room for @children on the right
+    callback clicked();
+    min-height: 64px;
+    background: selected ? Theme.secondary-container : touch.pressed ? Theme.surface-high : Theme.card;
+    border-top-left-radius: first ? 24px : 6px;
+    border-top-right-radius: self.border-top-left-radius;
+    border-bottom-left-radius: last ? 24px : 6px;
+    border-bottom-right-radius: self.border-bottom-left-radius;
+    animate background { duration: Theme.fast; }
+    touch := TouchArea { clicked => { root.clicked(); } }
+    if icon != "": Rectangle {
+        x: 16px;
+        y: (parent.height - self.height) / 2;
+        width: 40px;
+        height: 40px;
+        border-radius: 14px;
+        background: danger ? Theme.error.with-alpha(0.15) : Theme.secondary-container;
+        Icon { name: icon; size: 22px; color: danger ? Theme.error : Theme.on-secondary-container; }
+    }
+    VerticalLayout {
+        padding-top: 12px;
+        padding-bottom: 12px;
+        padding-left: icon != "" ? 72px : 20px;
+        padding-right: root.trailing + 16px;
+        alignment: center;
+        spacing: 2px;
+        Text { text: title; font-size: Type.body + 1px; font-weight: 600; color: danger ? Theme.error : Theme.on-surface; wrap: word-wrap; }
+        if subtitle != "": Text { text: subtitle; font-size: Type.label; color: Theme.on-surface-variant; wrap: word-wrap; }
+    }
+    HorizontalLayout {
+        x: parent.width - self.width - 12px;
+        width: root.trailing;
+        height: parent.height;
+        alignment: end;
+        @children
+        if chevron: Icon { name: "chevron_right"; color: Theme.on-surface-variant; }
+    }
+}
+
+component UserItem inherits Rectangle {
+    in property <UserRow> user;
+    in property <bool> first: true;
+    in property <bool> last: true;
+    background: touch.pressed ? Theme.surface-high : Theme.card;
+    border-top-left-radius: first ? 24px : 6px;
+    border-top-right-radius: self.border-top-left-radius;
+    border-bottom-left-radius: last ? 24px : 6px;
+    border-bottom-right-radius: self.border-bottom-left-radius;
+    touch := TouchArea { clicked => { AppState.open-user(user.author.handle); } }
+    Avatar { x: 14px; y: 14px; author: user.author; size: 44px; clicked => { AppState.open-user(user.author.handle); } }
+    VerticalLayout {
+        padding: 14px;
+        padding-left: 70px;
+        padding-right: user.is-me ? 14px : 128px;
+        spacing: 1px;
+        HorizontalLayout {
+            spacing: 4px;
+            Text { text: user.author.name; font-weight: 700; color: Theme.on-surface; overflow: elide; horizontal-stretch: 0; }
+            if user.author.verified: Verified { size: 17px; }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        Text { text: "@" + user.author.handle; color: Theme.on-surface-variant; font-size: Type.label + 1px; overflow: elide; }
+        if user.bio != "": Text { text: user.bio; color: Theme.on-surface; font-size: Type.label + 1px; wrap: word-wrap; }
+    }
+    if !user.is-me: Button {
+        width: self.preferred-width;
+        x: parent.width - self.width - 14px;
+        y: 18px;
+        button-height: 36px;
+        text: user.following ? I18n.t("Following") : I18n.t("Follow");
+        kind: user.following ? "outlined" : "filled";
+        clicked => { AppState.follow(user.author.handle); }
+    }
+}
+
+// A post in a list, wired to the global actions.
+component FeedCard inherits VerticalLayout {
+    in property <Post> post;
+    in property <bool> first;
+    in property <bool> last;
+    padding-left: 8px;
+    padding-right: 8px;
+    padding-bottom: 3px;
+    PostCard {
+        post: root.post;
+        first: root.first;
+        last: root.last;
+        open => { AppState.open-post(post.id); }
+        open-author => { AppState.open-user(post.author.handle); }
+        reply => { AppState.reply-to(post.id); }
+        like => { AppState.like(post.id); }
+        repost => { AppState.repost(post.id); }
+        bookmark => { AppState.bookmark(post.id); }
+        share => { AppState.share(post.id); }
+        more => { AppState.post-menu(post.id); }
+    }
+}
+
+component Segmented inherits Rectangle {
+    in property <[string]> labels;
+    in property <[string]> keys;
+    in property <string> current;
+    callback picked(string);
+    height: 44px;
+    border-radius: 22px;
+    background: Theme.surface-high;
+    HorizontalLayout {
+        padding: 4px;
+        spacing: 4px;
+        for label[i] in labels: Rectangle {
+            horizontal-stretch: 1;
+            border-radius: keys[i] == current ? 18px : (t.pressed ? 10px : 18px);
+            background: keys[i] == current ? Theme.primary : t.pressed ? Theme.on-surface.with-alpha(0.08) : transparent;
+            animate background { duration: Theme.fast; }
+            animate border-radius { duration: Theme.default; easing: cubic-bezier(0.34, 1.56, 0.64, 1); }
+            Text {
+                text: label;
+                font-weight: 700;
+                font-size: Type.label + 1px;
+                color: keys[i] == current ? Theme.on-primary : Theme.on-surface-variant;
+            }
+            t := TouchArea { clicked => { root.picked(keys[i]); } }
+        }
+    }
+}
+
+// ------------------------------------------------------------------ instance picker
+
+component InstancePage inherits Rectangle {
+    background: Theme.surface;
+    ScrollView {
+        VerticalLayout {
+            alignment: start;
+            padding: 24px;
+            padding-top: AppState.top-inset + 24px;
+            spacing: 24px;
+            HorizontalLayout {
+                spacing: 12px;
+                BrandMark { size: 40px; }
+                Text { text: "3itter"; font-size: 30px; font-weight: 800; color: Theme.on-surface; vertical-alignment: center; }
+            }
+            VerticalLayout {
+                spacing: 8px;
+                Text { text: "MATERIAL 3 TWITTER"; color: Theme.primary; font-weight: 800; font-size: Type.label; letter-spacing: 1.5px; }
+                Text { text: I18n.t("Choose your instance"); font-size: Type.display - 4px; font-weight: 800; color: Theme.on-surface; wrap: word-wrap; }
+                Text {
+                    text: I18n.t("3itter is a network of independent servers. Enter the address of the one you use, or pick one you’ve used before.");
+                    color: Theme.on-surface-variant;
+                    wrap: word-wrap;
+                }
+            }
+            Rectangle {
+                background: Theme.card;
+                border-radius: 28px;
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 14px;
+                    url := Field { label: I18n.t("Instance address"); hint: "twitter.republican"; accepted => { AppState.connect(self.text); } }
+                    if AppState.error != "": Rectangle {
+                        border-radius: 14px;
+                        background: Theme.error.with-alpha(0.14);
+                        Text { x: 14px; width: parent.width - 28px; text: AppState.error; color: Theme.error; wrap: word-wrap; font-weight: 600; }
+                        height: max(44px, self.preferred-height + 20px);
+                    }
+                    Button { text: I18n.t("Connect"); icon: "login"; busy: AppState.busy; horizontal-stretch: 1; clicked => { AppState.connect(url.text); } }
+                }
+            }
+            if AppState.instances.length > 0: VerticalLayout {
+                spacing: 3px;
+                SectionTitle { text: I18n.t("Your instances"); }
+                Rectangle { height: 7px; }
+                for inst[i] in AppState.instances: ListRow {
+                    icon: "dns";
+                    title: inst.name;
+                    subtitle: inst.domain;
+                    first: i == 0;
+                    last: i == AppState.instances.length - 1;
+                    chevron: false;
+                    trailing: 40px;
+                    clicked => { AppState.open-instance(inst.url); }
+                    IconButton { icon: "close"; size: 40px; label: I18n.t("Remove"); y: (parent.height - self.height) / 2; clicked => { AppState.forget-instance(inst.url); } }
+                }
+            }
+            VerticalLayout {
+                spacing: 10px;
+                SectionTitle { text: I18n.t("Popular instance"); }
+                ListRow {
+                    icon: "public";
+                    title: "twitter.republican";
+                    subtitle: I18n.t("The original 3itter instance");
+                    clicked => { url.text = "twitter.republican"; AppState.connect("twitter.republican"); }
+                }
+            }
+            Text { text: "3itter for Android · native · " + AppState.version; color: Theme.on-surface-variant; font-size: Type.small; horizontal-alignment: center; }
+        }
+    }
+}
+
+// ------------------------------------------------------------------ sign in / sign up
+
+component AuthPage inherits Rectangle {
+    background: Theme.surface;
+    property <bool> signup: AppState.auth-mode == "signup";
+    property <bool> accepted;
+    property <string> display-name;
+    ScrollView {
+        VerticalLayout {
+            alignment: start;
+            padding: 24px;
+            padding-top: AppState.top-inset + 16px;
+            spacing: 20px;
+            HorizontalLayout {
+                spacing: 10px;
+                BrandMark { size: 34px; }
+                Text { text: AppState.instance-name; font-size: 24px; font-weight: 800; color: Theme.on-surface; vertical-alignment: center; overflow: elide; }
+                Rectangle { horizontal-stretch: 1; }
+                Chip { icon: "swap_horiz"; text: AppState.instance-domain; clicked => { AppState.switch-instance(); } }
+            }
+            Text {
+                text: I18n.t("Happening now, in every\u{a0}shape.");
+                font-size: Type.display;
+                font-weight: 900;
+                color: Theme.on-surface;
+                wrap: word-wrap;
+            }
+            Rectangle {
+                background: Theme.card;
+                border-radius: 32px;
+                VerticalLayout {
+                    padding: 20px;
+                    spacing: 14px;
+                    Segmented {
+                        labels: AppState.registrations-open ? [I18n.t("Sign in"), I18n.t("Create account")] : [I18n.t("Sign in")];
+                        keys: AppState.registrations-open ? ["login", "signup"] : ["login"];
+                        current: AppState.auth-mode;
+                        picked(k) => { AppState.auth-mode = k; AppState.error = ""; }
+                    }
+                    if signup: Field { label: I18n.t("Display name"); text <=> root.display-name; }
+                    handle := Field { label: I18n.t("Handle"); hint: signup ? I18n.t("3–15 letters, numbers or underscores") : ""; }
+                    password := Field {
+                        label: I18n.t("Password");
+                        hint: signup ? I18n.t("At least 8 characters") : "";
+                        input-type: InputType.password;
+                        accepted => { if !signup { AppState.login(handle.text, password.text); } }
+                    }
+                    if signup: CheckBox {
+                        text: I18n.t("I agree to the Terms of Service and Privacy Policy");
+                        checked <=> root.accepted;
+                    }
+                    if AppState.error != "": Text { text: AppState.error; color: Theme.error; wrap: word-wrap; font-weight: 600; }
+                    Button {
+                        text: signup ? I18n.t("Create account") : I18n.t("Sign in");
+                        icon: signup ? "person_add" : "login";
+                        busy: AppState.busy;
+                        clicked => {
+                            if signup {
+                                if !root.accepted {
+                                    AppState.error = I18n.t("Please accept the Terms of Service and Privacy Policy to continue.");
+                                } else {
+                                    AppState.signup(handle.text, password.text, root.display-name);
+                                }
+                            } else {
+                                AppState.login(handle.text, password.text);
+                            }
+                        }
+                    }
+                }
+            }
+            Button { kind: "text"; icon: "swap_horiz"; text: I18n.t("Use a different instance"); clicked => { AppState.switch-instance(); } }
+        }
+    }
+}
+
+// ------------------------------------------------------------------ main tabs
+
+component HomePage inherits VerticalLayout {
+    TopBar {
+        inset: AppState.top-inset;
+        title: I18n.t("Home");
+        large: true;
+        HorizontalLayout {
+            y: AppState.top-inset;
+            height: parent.height - AppState.top-inset;
+            alignment: end;
+            padding-right: 8px;
+            IconButton { icon: "refresh"; label: I18n.t("Refresh"); y: (parent.height - self.height) / 2; clicked => { AppState.refresh(); } }
+        }
+    }
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-bottom: 8px;
+        Segmented {
+            labels: [I18n.t("For you"), I18n.t("Following")];
+            keys: ["foryou", "following"];
+            current: AppState.feed-kind;
+            picked(k) => { AppState.set-feed(k); }
+        }
+    }
+    if AppState.feed-loading && AppState.feed.length == 0: Loading { }
+    if !AppState.feed-loading && AppState.feed.length == 0: EmptyState {
+        icon: "group";
+        title: AppState.feed-kind == "following" ? I18n.t("Your circle is quiet") : I18n.t("Nothing here yet");
+        body: AppState.feed-kind == "following" ? I18n.t("Follow people to fill this feed with their posts and reposts.") : I18n.t("Be the first to post something.");
+    }
+    if AppState.feed.length > 0: list := ListView {
+        vertical-stretch: 1;
+        for p[i] in AppState.feed: FeedCard { post: p; first: i == 0; last: i == AppState.feed.length - 1; }
+        changed content-y => {
+            if (-self.content-y + self.visible-height > self.content-height - 1200px) { AppState.load-more("feed"); }
+        }
+    }
+}
+
+component ExplorePage inherits VerticalLayout {
+    TopBar { inset: AppState.top-inset; title: I18n.t("Explore"); large: true; }
+    VerticalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-bottom: 8px;
+        spacing: 10px;
+        q := LineEdit {
+            placeholder-text: I18n.t("Search posts, people, #tags");
+            text: AppState.query;
+            accepted => { AppState.search(self.text, AppState.search-type); }
+        }
+        if AppState.query != "": Segmented {
+            labels: [I18n.t("Posts"), I18n.t("People")];
+            keys: ["posts", "people"];
+            current: AppState.search-type;
+            picked(k) => { AppState.search(AppState.query, k); }
+        }
+    }
+    if AppState.search-loading: Loading { }
+    if AppState.query == "" && !AppState.search-loading: ScrollView {
+        vertical-stretch: 1;
+        VerticalLayout {
+            alignment: start;
+            padding: 8px;
+            padding-top: 0;
+            spacing: 3px;
+            if AppState.trends.length > 0: HorizontalLayout { padding-left: 8px; height: 36px; SectionTitle { text: I18n.t("Trending"); } }
+            for tr[i] in AppState.trends: ListRow {
+                icon: "tag";
+                title: "#" + tr.tag;
+                subtitle: tr.count;
+                first: i == 0;
+                last: i == AppState.trends.length - 1;
+                clicked => { AppState.open-tag(tr.tag); }
+            }
+            if AppState.suggestions.length > 0: HorizontalLayout { padding-left: 8px; padding-top: 16px; SectionTitle { text: I18n.t("Who to follow"); } }
+            if AppState.suggestions.length > 0: Rectangle { height: 8px; }
+            for u[i] in AppState.suggestions: UserItem { user: u; first: i == 0; last: i == AppState.suggestions.length - 1; }
+        }
+    }
+    if AppState.query != "" && !AppState.search-loading && AppState.search-type == "posts": VerticalLayout {
+        vertical-stretch: 1;
+        if AppState.search-posts.length == 0: EmptyState { icon: "search"; title: I18n.t1("No posts for “{q}”", AppState.query); body: I18n.t("Try a different word or hashtag."); }
+        if AppState.search-posts.length > 0: ListView {
+            for p[i] in AppState.search-posts: FeedCard { post: p; first: i == 0; last: i == AppState.search-posts.length - 1; }
+        }
+    }
+    if AppState.query != "" && !AppState.search-loading && AppState.search-type == "people": VerticalLayout {
+        vertical-stretch: 1;
+        if AppState.search-users.length == 0: EmptyState { icon: "person"; title: I18n.t1("No people for “{q}”", AppState.query); body: I18n.t("Try a name, a handle, or @handle@instance for someone on another instance."); }
+        if AppState.search-users.length > 0: ListView {
+            for u[i] in AppState.search-users: VerticalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                padding-bottom: 3px;
+                UserItem { user: u; first: i == 0; last: i == AppState.search-users.length - 1; }
+            }
+        }
+    }
+}
+
+component NotificationsPage inherits VerticalLayout {
+    TopBar { inset: AppState.top-inset; title: I18n.t("Notifications"); large: true; }
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-bottom: 8px;
+        Segmented {
+            labels: [I18n.t("All"), I18n.t("Mentions")];
+            keys: ["all", "mentions"];
+            current: AppState.notif-filter;
+            picked(k) => { AppState.set-notif-filter(k); }
+        }
+    }
+    if AppState.notif-loading && AppState.notifications.length == 0: Loading { }
+    if !AppState.notif-loading && AppState.notifications.length == 0: EmptyState {
+        icon: "notifications";
+        title: AppState.notif-filter == "mentions" ? I18n.t("No mentions yet") : I18n.t("No notifications yet");
+        body: AppState.notif-filter == "mentions" ? I18n.t("Replies, mentions and quotes of your posts show up here.") : I18n.t("Likes, replies, reposts and new followers will show up here.");
+    }
+    if AppState.notifications.length > 0: ListView {
+        vertical-stretch: 1;
+        for n[i] in AppState.notifications: VerticalLayout {
+            padding-left: 8px;
+            padding-right: 8px;
+            padding-bottom: 3px;
+            Rectangle {
+                background: n.unread ? Theme.primary-container.with-alpha(0.45) : Theme.card;
+                border-top-left-radius: i == 0 ? 24px : 6px;
+                border-top-right-radius: self.border-top-left-radius;
+                border-bottom-left-radius: i == AppState.notifications.length - 1 ? 24px : 6px;
+                border-bottom-right-radius: self.border-bottom-left-radius;
+                TouchArea { clicked => { if n.post-id > 0 { AppState.open-post(n.post-id); } else { AppState.open-user(n.handle); } } }
+                Rectangle {
+                    x: 14px;
+                    y: 14px;
+                    width: 40px;
+                    height: 40px;
+                    border-radius: 14px;
+                    background: n.kind == "like" ? Theme.like.with-alpha(0.16) : n.kind == "repost" ? Theme.repost.with-alpha(0.16) : Theme.secondary-container;
+                    Icon { name: n.icon; filled: true; size: 22px; color: n.kind == "like" ? Theme.like : n.kind == "repost" ? Theme.repost : Theme.on-secondary-container; }
+                }
+                VerticalLayout {
+                    padding: 14px;
+                    padding-left: 66px;
+                    spacing: 6px;
+                    HorizontalLayout {
+                        spacing: 6px;
+                        height: 32px;
+                        Avatar { author: n.author; size: 32px; clicked => { AppState.open-user(n.author.handle); } }
+                        if n.more > 0: Rectangle {
+                            width: 32px;
+                            height: 32px;
+                            border-radius: 12px;
+                            background: Theme.surface-highest;
+                            Text { text: "+\{n.more}"; font-size: Type.small; font-weight: 700; color: Theme.on-surface-variant; }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                        Text { text: n.time; color: Theme.on-surface-variant; font-size: Type.small; vertical-alignment: center; }
+                    }
+                    Text { text: n.text; wrap: word-wrap; color: Theme.on-surface; }
+                    if n.snippet != "": Text { text: n.snippet; wrap: word-wrap; color: Theme.on-surface-variant; }
+                }
+            }
+        }
+        changed content-y => {
+            if (-self.content-y + self.visible-height > self.content-height - 900px) { AppState.load-more("notifications"); }
+        }
+    }
+}
+
+component MessagesPage inherits VerticalLayout {
+    TopBar { inset: AppState.top-inset; title: I18n.t("Messages"); large: true; }
+    if AppState.conv-loading && AppState.conversations.length == 0: Loading { }
+    if !AppState.conv-loading && AppState.conversations.length == 0: EmptyState {
+        icon: "mail";
+        title: I18n.t("Start a conversation");
+        body: I18n.t("Private messages between you and other people on 3itter.");
+    }
+    if AppState.conversations.length > 0: ListView {
+        vertical-stretch: 1;
+        for c[i] in AppState.conversations: VerticalLayout {
+            padding-left: 8px;
+            padding-right: 8px;
+            padding-bottom: 3px;
+            Rectangle {
+                background: t.pressed ? Theme.surface-high : Theme.card;
+                border-top-left-radius: i == 0 ? 24px : 6px;
+                border-top-right-radius: self.border-top-left-radius;
+                border-bottom-left-radius: i == AppState.conversations.length - 1 ? 24px : 6px;
+                border-bottom-right-radius: self.border-bottom-left-radius;
+                t := TouchArea { clicked => { AppState.open-chat(c.author.handle); } }
+                HorizontalLayout {
+                    padding: 14px;
+                    spacing: 12px;
+                    Avatar { author: c.author; size: 48px; }
+                    VerticalLayout {
+                        alignment: center;
+                        spacing: 2px;
+                        horizontal-stretch: 1;
+                        HorizontalLayout {
+                            spacing: 6px;
+                            Text { text: c.author.name; font-weight: 700; color: Theme.on-surface; overflow: elide; horizontal-stretch: 1; }
+                            Text { text: c.time; font-size: Type.small; color: Theme.on-surface-variant; }
+                        }
+                        Text { text: c.last; color: c.unread > 0 ? Theme.on-surface : Theme.on-surface-variant; font-weight: c.unread > 0 ? 700 : 400; overflow: elide; }
+                    }
+                    if c.unread > 0: Rectangle {
+                        width: 22px;
+                        height: 22px;
+                        y: (parent.height - self.height) / 2;
+                        border-radius: 11px;
+                        background: Theme.primary;
+                        Text { text: "\{c.unread}"; color: Theme.on-primary; font-size: Type.small; font-weight: 800; }
+                    }
+                }
+            }
+        }
+    }
+}
+
+component ProfileHeader inherits VerticalLayout {
+    in property <Profile> p;
+    spacing: 0;
+    Rectangle {
+        height: 196px;
+        Rectangle {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: 140px;
+            background: p.banner-color;
+            clip: true;
+            Image { width: 100%; height: 100%; source: p.banner; image-fit: cover; }
+        }
+        Rectangle {
+            x: 12px;
+            y: 94px;
+            width: 100px;
+            height: 100px;
+            border-radius: 38px;
+            background: Theme.surface;
+            Avatar { author: p.author; size: 88px; }
+        }
+        HorizontalLayout {
+            x: 120px;
+            y: 148px;
+            width: parent.width - 132px;
+            height: 44px;
+            alignment: end;
+            spacing: 8px;
+            if !p.is-me: IconButton { icon: "mail"; tint: Theme.on-surface; size: 44px; label: I18n.t("Message"); clicked => { AppState.open-chat(p.author.handle); } }
+            if !p.is-me: Button {
+                button-height: 44px;
+                text: p.is-following ? I18n.t("Following") : I18n.t("Follow");
+                kind: p.is-following ? "outlined" : "filled";
+                clicked => { AppState.follow(p.author.handle); }
+            }
+            if p.is-me: Button { button-height: 44px; kind: "outlined"; icon: "settings"; text: I18n.t("Settings"); clicked => { AppState.navigate("settings"); } }
+        }
+    }
+    VerticalLayout {
+        padding: 16px;
+        padding-top: 8px;
+        spacing: 6px;
+        HorizontalLayout {
+            spacing: 6px;
+            Text { text: p.author.name; font-size: Type.headline - 2px; font-weight: 900; color: Theme.on-surface; wrap: word-wrap; horizontal-stretch: 0; }
+            if p.author.verified: Verified { size: 22px; }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            Text { text: "@" + p.author.handle; color: Theme.on-surface-variant; horizontal-stretch: 0; }
+            if p.author.pronouns != "": Text { text: "· " + p.author.pronouns; color: Theme.on-surface-variant; horizontal-stretch: 0; }
+            if p.follows-you: Rectangle {
+                background: Theme.surface-highest;
+                border-radius: 6px;
+                width: fy.preferred-width + 12px;
+                fy := Text { text: I18n.t("Follows you"); font-size: Type.small; color: Theme.on-surface-variant; }
+            }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        if p.bio != "": Text { text: p.bio; wrap: word-wrap; color: Theme.on-surface; }
+        HorizontalLayout {
+            spacing: 16px;
+            if p.location != "": HorizontalLayout { spacing: 4px; Icon { name: "public"; size: 16px; color: Theme.on-surface-variant; } Text { text: p.location; color: Theme.on-surface-variant; font-size: Type.label + 1px; } }
+            HorizontalLayout { spacing: 4px; Icon { name: "schedule"; size: 16px; color: Theme.on-surface-variant; } Text { text: p.joined; color: Theme.on-surface-variant; font-size: Type.label + 1px; } }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        HorizontalLayout {
+            spacing: 16px;
+            Text { text: "\{p.following} " + I18n.t("Following"); color: Theme.on-surface; font-weight: 600; }
+            Text { text: "\{p.followers} " + (p.followers == 1 ? I18n.t("Follower") : I18n.t("Followers")); color: Theme.on-surface; font-weight: 600; }
+            Rectangle { horizontal-stretch: 1; }
+        }
+    }
+}
+
+component ProfilePage inherits VerticalLayout {
+    in property <bool> tab-root;
+    TopBar {
+        inset: AppState.top-inset;
+        title: AppState.profile.author.name;
+        subtitle: "\{AppState.profile.posts} " + I18n.t("Posts");
+        back: !tab-root;
+        go-back => { AppState.back(); }
+    }
+    if AppState.profile-loading && AppState.profile.author.handle == "": Loading { }
+    if AppState.profile.author.handle != "": sv := ScrollView {
+        vertical-stretch: 1;
+        changed content-y => {
+            if (-self.content-y + self.visible-height > self.content-height - 900px) { AppState.load-more("profile"); }
+        }
+        VerticalLayout {
+            alignment: start;
+            spacing: 0;
+            ProfileHeader { p: AppState.profile; }
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                padding-bottom: 10px;
+                Segmented {
+                    labels: [I18n.t("Posts"), I18n.t("Replies"), I18n.t("Media"), I18n.t("Likes")];
+                    keys: ["posts", "replies", "media", "likes"];
+                    current: AppState.profile-tab;
+                    picked(k) => { AppState.set-profile-tab(k); }
+                }
+            }
+            if AppState.profile-posts.length == 0 && !AppState.profile-loading: EmptyState {
+                icon: "forum";
+                title: AppState.profile.is-me ? I18n.t("You haven’t posted yet") : I18n.t("Nothing here yet");
+            }
+            for p[i] in AppState.profile-posts: FeedCard { post: p; first: i == 0; last: i == AppState.profile-posts.length - 1; }
+            if AppState.profile-loading: Loading { }
+            Rectangle { height: 96px; }
+        }
+    }
+}
+
+// ------------------------------------------------------------------ pushed pages
+
+component PostPage inherits VerticalLayout {
+    TopBar { inset: AppState.top-inset; title: I18n.t("Post|noun"); back: true; go-back => { AppState.back(); } }
+    if AppState.thread-loading && AppState.thread.length == 0: Loading { }
+    if AppState.thread.length > 0: ScrollView {
+        vertical-stretch: 1;
+        VerticalLayout {
+            alignment: start;
+            padding-bottom: 24px;
+            for p[i] in AppState.thread: VerticalLayout {
+                padding-left: 8px;
+                padding-right: 8px;
+                padding-bottom: 3px;
+                PostCard {
+                    post: p;
+                    main: i == AppState.thread-main;
+                    first: i == 0;
+                    last: i == AppState.thread-main;
+                    open => { if i != AppState.thread-main { AppState.open-post(p.id); } }
+                    open-author => { AppState.open-user(p.author.handle); }
+                    reply => { AppState.reply-to(p.id); }
+                    like => { AppState.like(p.id); }
+                    repost => { AppState.repost(p.id); }
+                    bookmark => { AppState.bookmark(p.id); }
+                    share => { AppState.share(p.id); }
+                    more => { AppState.post-menu(p.id); }
+                }
+            }
+            // Quick reply
+            VerticalLayout {
+                padding: 8px;
+                padding-top: 5px;
+                Rectangle {
+                    background: Theme.card;
+                    border-radius: 24px;
+                    HorizontalLayout {
+                        padding: 12px;
+                        spacing: 10px;
+                        Avatar { author: AppState.me; size: 36px; y: (parent.height - self.height) / 2; }
+                        reply := LineEdit {
+                            placeholder-text: I18n.t("Post your reply");
+                            accepted => { AppState.quick-reply(self.text); self.text = ""; }
+                        }
+                        IconButton {
+                            icon: "send";
+                            filled: true;
+                            tint: Theme.primary;
+                            label: I18n.t("Reply");
+                            y: (parent.height - self.height) / 2;
+                            clicked => { AppState.quick-reply(reply.text); reply.text = ""; }
+                        }
+                    }
+                }
+            }
+            for p[i] in AppState.replies: FeedCard { post: p; first: i == 0; last: i == AppState.replies.length - 1; }
+            if AppState.replies.length == 0 && !AppState.thread-loading: Text {
+                text: I18n.t("No replies yet");
+                horizontal-alignment: center;
+                color: Theme.on-surface-variant;
+                height: 64px;
+                vertical-alignment: center;
+            }
+        }
+    }
+}
+
+component ChatPage inherits VerticalLayout {
+    TopBar {
+        inset: AppState.top-inset;
+        title: AppState.chat-with.name;
+        subtitle: "@" + AppState.chat-with.handle;
+        back: true;
+        go-back => { AppState.back(); }
+    }
+    list := ListView {
+        vertical-stretch: 1;
+        for m[i] in AppState.chat: Rectangle {
+            // Bubbles size themselves from their text: as wide as the text, at most 78% of the screen.
+            property <length> max-text: list.visible-width * 0.78 - 28px;
+            height: body.height + 20px + 22px;
+            bubble := Rectangle {
+                x: m.mine ? parent.width - self.width - 12px : 12px;
+                y: 2px;
+                width: body.width + 28px;
+                height: body.height + 20px;
+                background: m.mine ? Theme.primary : Theme.surface-highest;
+                border-radius: 20px;
+                border-bottom-right-radius: m.mine ? 6px : 20px;
+                border-bottom-left-radius: m.mine ? 20px : 6px;
+                body := Text {
+                    x: 14px;
+                    y: 10px;
+                    width: min(self.preferred-width, max-text);
+                    height: self.preferred-height;
+                    text: m.text;
+                    wrap: word-wrap;
+                    color: m.mine ? Theme.on-primary : Theme.on-surface;
+                }
+            }
+            Text {
+                x: m.mine ? parent.width - self.width - 16px : 16px;
+                y: bubble.y + bubble.height + 2px;
+                text: m.time + (m.seen ? " · " + I18n.t("Seen") : "");
+                font-size: Type.small;
+                color: Theme.on-surface-variant;
+            }
+        }
+        changed content-height => { self.content-y = min(0px, self.visible-height - self.content-height); }
+    }
+    if AppState.chat-blocked != "": Text { text: AppState.chat-blocked; color: Theme.on-surface-variant; horizontal-alignment: center; wrap: word-wrap; height: 56px; vertical-alignment: center; }
+    if AppState.chat-blocked == "": Rectangle {
+        background: Theme.surface;
+        HorizontalLayout {
+            padding: 10px;
+            spacing: 8px;
+            msg := LineEdit {
+                placeholder-text: I18n.t("Message");
+                accepted => { AppState.send-message(self.text); self.text = ""; }
+            }
+            IconButton {
+                icon: "send";
+                filled: true;
+                tint: Theme.on-primary;
+                container: Theme.primary;
+                label: I18n.t("Send");
+                clicked => { AppState.send-message(msg.text); msg.text = ""; }
+            }
+        }
+    }
+}
+
+component ComposePage inherits VerticalLayout {
+    property <int> left: AppState.max-post - AppState.compose-text.character-count;
+    Rectangle {
+        height: AppState.top-inset + 64px;
+        HorizontalLayout {
+            y: AppState.top-inset;
+            height: 64px;
+            padding-left: 4px;
+            padding-right: 12px;
+            spacing: 8px;
+            IconButton { icon: "close"; tint: Theme.on-surface; label: I18n.t("Cancel"); y: 8px; clicked => { AppState.back(); } }
+            Rectangle { horizontal-stretch: 1; }
+            Text { text: "\{left}"; color: left < 0 ? Theme.error : Theme.on-surface-variant; vertical-alignment: center; font-weight: 600; }
+            Button {
+                y: 10px;
+                button-height: 44px;
+                text: I18n.t("Post");
+                busy: AppState.busy;
+                enabled: AppState.compose-text != "" && left >= 0;
+                clicked => { AppState.submit-post(AppState.compose-text); }
+            }
+        }
+    }
+    if AppState.compose-context != "": Text { text: AppState.compose-context; color: Theme.primary; font-weight: 600; x: 72px; }
+    HorizontalLayout {
+        padding: 16px;
+        spacing: 12px;
+        vertical-stretch: 1;
+        Avatar { author: AppState.me; size: 44px; }
+        TextEdit {
+            text <=> AppState.compose-text;
+            placeholder-text: I18n.t("What’s happening?");
+            wrap: word-wrap;
+            font-size: Type.title + 3px;
+            vertical-stretch: 1;
+        }
+    }
+    HorizontalLayout {
+        padding: 12px;
+        spacing: 8px;
+        Icon { name: "android"; size: 18px; color: Theme.on-surface-variant; }
+        Text { text: I18n.t1("3itter for {device}", "Android"); color: Theme.on-surface-variant; font-size: Type.label; vertical-alignment: center; }
+    }
+}
+
+component SettingsPage inherits VerticalLayout {
+    TopBar { inset: AppState.top-inset; title: I18n.t("Settings"); back: true; go-back => { AppState.back(); } }
+    ScrollView {
+        vertical-stretch: 1;
+        VerticalLayout {
+            alignment: start;
+            padding: 8px;
+            spacing: 3px;
+            Rectangle {
+                background: Theme.card;
+                border-radius: 24px;
+                HorizontalLayout {
+                    padding: 16px;
+                    spacing: 14px;
+                    Avatar { author: AppState.me; size: 56px; }
+                    VerticalLayout {
+                        alignment: center;
+                        Text { text: AppState.me.name; font-size: Type.title-large; font-weight: 800; color: Theme.on-surface; overflow: elide; }
+                        Text { text: "@" + AppState.me.handle + "@" + AppState.instance-domain; color: Theme.on-surface-variant; overflow: elide; }
+                    }
+                }
+                TouchArea { clicked => { AppState.open-user(AppState.me.handle); } }
+            }
+            Rectangle { height: 12px; }
+            ListRow { icon: "translate"; title: I18n.t("Language"); subtitle: AppState.language-auto; last: false; clicked => { AppState.navigate("language"); } }
+            ListRow { icon: "devices"; title: I18n.t("Devices & sessions"); subtitle: I18n.t("See where you’re signed in and sign out remotely"); first: false; last: false; clicked => { AppState.navigate("sessions"); } }
+            ListRow {
+                icon: "android";
+                title: I18n.t("Show which device I post from");
+                subtitle: I18n.t("Adds “3itter for Android”, “3itter for iPhone” and so on under your new posts");
+                first: false;
+                chevron: false;
+                trailing: 56px;
+                clicked => { AppState.set-show-client(!AppState.show-client); }
+                Switch { checked: AppState.show-client; toggled => { AppState.set-show-client(self.checked); } y: (parent.height - self.height) / 2; }
+            }
+            Rectangle { height: 12px; }
+            ListRow { icon: "swap_horiz"; title: I18n.t("Switch instance"); subtitle: AppState.instance-domain; last: false; clicked => { AppState.switch-instance(); } }
+            ListRow { icon: "logout"; title: I18n.t("Log out"); danger: true; first: false; chevron: false; clicked => { AppState.logout(); } }
+            Rectangle { height: 16px; }
+            Text { text: "3itter for Android " + AppState.version + " · Rust + Slint"; color: Theme.on-surface-variant; font-size: Type.small; horizontal-alignment: center; }
+        }
+    }
+}
+
+component SessionsPage inherits VerticalLayout {
+    TopBar { inset: AppState.top-inset; title: I18n.t("Devices & sessions"); back: true; go-back => { AppState.back(); } }
+    ScrollView {
+        vertical-stretch: 1;
+        VerticalLayout {
+            alignment: start;
+            padding: 8px;
+            spacing: 3px;
+            HorizontalLayout { padding: 8px; padding-bottom: 12px; Text { text: I18n.t("Sign out anything you don’t recognise, then change your password."); wrap: word-wrap; color: Theme.on-surface-variant; } }
+            if AppState.sessions.length == 0: Loading { }
+            for s[i] in AppState.sessions: Rectangle {
+                background: Theme.card;
+                border-top-left-radius: i == 0 ? 24px : 6px;
+                border-top-right-radius: self.border-top-left-radius;
+                border-bottom-left-radius: i == AppState.sessions.length - 1 ? 24px : 6px;
+                border-bottom-right-radius: self.border-bottom-left-radius;
+                Rectangle {
+                    x: 14px;
+                    y: 16px;
+                    width: 44px;
+                    height: 44px;
+                    border-radius: s.current ? 16px : 22px;
+                    background: s.current ? Theme.primary : Theme.secondary-container;
+                    Icon { name: s.icon; color: s.current ? Theme.on-primary : Theme.on-secondary-container; }
+                }
+                VerticalLayout {
+                    padding: 14px;
+                    padding-left: 72px;
+                    padding-right: s.current ? 14px : 120px;
+                    spacing: 2px;
+                    Text { text: s.title; font-weight: 700; color: Theme.on-surface; wrap: word-wrap; }
+                    if s.current: HorizontalLayout {
+                        Rectangle {
+                            background: Theme.primary-container;
+                            border-radius: 6px;
+                            height: 20px;
+                            width: cur.preferred-width + 12px;
+                            cur := Text { text: I18n.t("This device"); font-size: Type.small; color: Theme.on-primary-container; font-weight: 600; }
+                        }
+                        Rectangle { horizontal-stretch: 1; }
+                    }
+                    Text { text: s.sub; color: Theme.on-surface-variant; font-size: Type.label; wrap: word-wrap; }
+                    Text { text: s.detail; color: Theme.on-surface-variant; font-size: Type.label; wrap: word-wrap; }
+                }
+                if !s.current: Button { kind: "tonal"; button-height: 36px; text: I18n.t("Sign out"); width: self.preferred-width; x: parent.width - self.width - 14px; y: (parent.height - self.height) / 2; clicked => { AppState.revoke-session(s.id); } }
+            }
+            if AppState.sessions.length > 1: HorizontalLayout {
+                padding-top: 16px;
+                alignment: center;
+                Button { kind: "danger"; icon: "logout"; text: I18n.t("Sign out all other sessions"); clicked => { AppState.revoke-others(); } }
+            }
+            Text { text: I18n.t("Locations are approximate and come from your IP address."); color: Theme.on-surface-variant; font-size: Type.small; horizontal-alignment: center; wrap: word-wrap; height: 48px; vertical-alignment: center; }
+        }
+    }
+}
+
+component LanguagePage inherits VerticalLayout {
+    TopBar { inset: AppState.top-inset; title: I18n.t("Language"); back: true; go-back => { AppState.back(); } }
+    ScrollView {
+        vertical-stretch: 1;
+        VerticalLayout {
+            alignment: start;
+            padding: 8px;
+            spacing: 3px;
+            HorizontalLayout { padding: 8px; padding-bottom: 12px; Text { text: I18n.t("Menus, buttons and messages. Posts are always shown as their authors wrote them."); wrap: word-wrap; color: Theme.on-surface-variant; } }
+            for l[i] in AppState.languages: ListRow {
+                title: l.name;
+                subtitle: l.sub;
+                first: i == 0;
+                last: i == AppState.languages.length - 1;
+                chevron: false;
+                trailing: 28px;
+                selected: l.code == AppState.language;
+                clicked => { AppState.set-language(l.code); }
+                if l.code == AppState.language: Icon { name: "check_circle"; filled: true; color: Theme.primary; }
+            }
+            Text { text: I18n.t("Saved to your account, so it follows you to every device."); color: Theme.on-surface-variant; font-size: Type.small; horizontal-alignment: center; height: 48px; vertical-alignment: center; }
+        }
+    }
+}
+
+// ------------------------------------------------------------------ window
+
+export component AppWindow inherits Window {
+    title: "3itter";
+    preferred-width: 412px;
+    preferred-height: 880px;
+    min-width: 320px;
+    background: Theme.surface;
+    default-font-size: Type.body;
+
+    // Copies text through a hidden input (Slint has no clipboard API of its own).
+    public function copy-text(s: string) {
+        clip.text = s;
+        clip.select-all();
+        clip.copy();
+    }
+
+    property <bool> tab-page: AppState.page == "home" || AppState.page == "explore" || AppState.page == "notifications"
+        || AppState.page == "messages" || (AppState.page == "profile" && AppState.profile.is-me);
+    property <length> keyboard: self.virtual-keyboard-size.height;
+    property <length> bottom-inset: max(self.safe-area-insets.bottom, keyboard);
+    init => {
+        AppState.top-inset = self.safe-area-insets.top;
+        keys.focus();
+    }
+    changed safe-area-insets => { AppState.top-inset = self.safe-area-insets.top; }
+
+    clip := TextInput { visible: false; width: 0; height: 0; }
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Back || (event.text == Key.Escape) {
+                AppState.back();
+                return accept;
+            }
+            return reject;
+        }
+        VerticalLayout {
+            padding-bottom: root.bottom-inset;
+            if AppState.screen == "loading": Rectangle {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 24px;
+                    HorizontalLayout { alignment: center; BrandMark { size: 72px; } }
+                    Loading { }
+                }
+            }
+            if AppState.screen == "instance": InstancePage { vertical-stretch: 1; }
+            if AppState.screen == "auth": AuthPage { vertical-stretch: 1; }
+            if AppState.screen == "main": main-area := Rectangle {
+                vertical-stretch: 1;
+                // Pages get explicit geometry, so a page with little content can't shrink the area.
+                property <length> nav-height: root.tab-page && root.keyboard == 0 ? 80px : 0px;
+                property <length> page-height: self.height - nav-height;
+                if AppState.page == "home": HomePage { x: 0; y: 0; width: parent.width; height: parent.page-height; }
+                if AppState.page == "explore": ExplorePage { x: 0; y: 0; width: parent.width; height: parent.page-height; }
+                if AppState.page == "notifications": NotificationsPage { x: 0; y: 0; width: parent.width; height: parent.page-height; }
+                if AppState.page == "messages": MessagesPage { x: 0; y: 0; width: parent.width; height: parent.page-height; }
+                if AppState.page == "profile": ProfilePage { x: 0; y: 0; width: parent.width; height: parent.page-height; tab-root: root.tab-page; }
+                if AppState.page == "post": PostPage { x: 0; y: 0; width: parent.width; height: parent.page-height; }
+                if AppState.page == "chat": ChatPage { x: 0; y: 0; width: parent.width; height: parent.page-height; }
+                if AppState.page == "compose": ComposePage { x: 0; y: 0; width: parent.width; height: parent.page-height; }
+                if AppState.page == "settings": SettingsPage { x: 0; y: 0; width: parent.width; height: parent.page-height; }
+                if AppState.page == "sessions": SessionsPage { x: 0; y: 0; width: parent.width; height: parent.page-height; }
+                if AppState.page == "language": LanguagePage { x: 0; y: 0; width: parent.width; height: parent.page-height; }
+
+                // Navigation bar
+                if nav-height > 0: Rectangle {
+                    x: 0;
+                    y: parent.page-height;
+                    width: parent.width;
+                    height: 80px;
+                    background: Theme.surface-container;
+                    HorizontalLayout {
+                        padding-top: 12px;
+                        padding-bottom: 16px;
+                        NavItem { icon: "home"; text: I18n.t("Home"); active: AppState.page == "home"; clicked => { AppState.navigate("home"); } }
+                        NavItem { icon: "search"; text: I18n.t("Explore"); active: AppState.page == "explore"; clicked => { AppState.navigate("explore"); } }
+                        NavItem { icon: "notifications"; text: I18n.t("Notifications"); badge: AppState.badge-notifications; active: AppState.page == "notifications"; clicked => { AppState.navigate("notifications"); } }
+                        NavItem { icon: "mail"; text: I18n.t("Messages"); badge: AppState.badge-messages; active: AppState.page == "messages"; clicked => { AppState.navigate("messages"); } }
+                        NavItem { icon: "person"; text: I18n.t("Profile"); active: AppState.page == "profile"; clicked => { AppState.navigate("me"); } }
+                    }
+                }
+                // Compose FAB
+                if (AppState.page == "home" || AppState.page == "profile") && root.keyboard == 0: fab := Rectangle {
+                    x: parent.width - self.width - 16px;
+                    y: parent.page-height - self.height - 16px;
+                    width: 64px;
+                    height: 64px;
+                    border-radius: fab-touch.pressed ? 32px : 20px;
+                    background: Theme.primary-container;
+                    drop-shadow-blur: 12px;
+                    drop-shadow-offset-y: 4px;
+                    drop-shadow-color: #00000040;
+                    animate border-radius { duration: Theme.default; easing: cubic-bezier(0.34, 1.56, 0.64, 1); }
+                    Icon { name: "edit"; color: Theme.on-primary-container; size: 26px; }
+                    fab-touch := TouchArea { clicked => { AppState.compose(); } }
+                }
+            }
+        }
+        // Bottom sheet
+        if AppState.sheet.length > 0: Rectangle {
+            width: parent.width;
+            height: parent.height;
+            background: #00000066;
+            TouchArea { clicked => { AppState.sheet-pick(-1); } }
+            Rectangle {
+                y: parent.height - self.height;
+                width: parent.width;
+                height: sheet-col.preferred-height + root.bottom-inset;
+                border-top-left-radius: 28px;
+                border-top-right-radius: 28px;
+                background: Theme.surface-low;
+                TouchArea { }
+                sheet-col := VerticalLayout {
+                    y: 0;
+                    height: self.preferred-height;
+                    padding: 8px;
+                    padding-bottom: 16px;
+                    spacing: 2px;
+                    HorizontalLayout {
+                        alignment: center;
+                        padding: 6px;
+                        Rectangle { width: 32px; height: 4px; border-radius: 2px; background: Theme.outline; }
+                    }
+                    if AppState.sheet-title != "": HorizontalLayout {
+                        padding: 12px;
+                        padding-top: 4px;
+                        Text { text: AppState.sheet-title; font-size: Type.title; font-weight: 700; color: Theme.on-surface; wrap: word-wrap; }
+                    }
+                    for it[i] in AppState.sheet: Rectangle {
+                        height: 56px;
+                        border-radius: st.pressed ? 12px : 28px;
+                        background: st.pressed ? Theme.surface-highest : transparent;
+                        animate border-radius { duration: Theme.default; easing: cubic-bezier(0.34, 1.56, 0.64, 1); }
+                        HorizontalLayout {
+                            padding-left: 16px;
+                            spacing: 16px;
+                            Icon { name: it.icon; color: it.danger ? Theme.error : Theme.on-surface-variant; }
+                            Text { text: it.label; vertical-alignment: center; font-size: Type.body + 1px; color: it.danger ? Theme.error : Theme.on-surface; horizontal-stretch: 1; }
+                        }
+                        st := TouchArea { clicked => { AppState.sheet-pick(i); } }
+                    }
+                }
+            }
+        }
+        // Snackbar
+        if AppState.toast != "": Rectangle {
+            x: 16px;
+            width: parent.width - 32px;
+            y: parent.height - root.bottom-inset - (root.tab-page ? 80px : 0) - self.height - 16px;
+            height: max(48px, toast-text.preferred-height + 24px);
+            border-radius: 14px;
+            background: Theme.inverse-surface;
+            toast-text := Text {
+                x: 16px;
+                width: parent.width - 32px;
+                text: AppState.toast;
+                color: Theme.inverse-on-surface;
+                wrap: word-wrap;
+                vertical-alignment: center;
+            }
+        }
+    }
+}

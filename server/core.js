@@ -5,6 +5,8 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { all, get, run, UPLOAD_DIR, getSetting } from './db.js';
 import { fail, parseCookies } from './http.js';
+import { countryOf, clientOf } from './locale.js';
+import { publish } from './realtime.js';
 
 // ---------------------------------------------------------------- config
 
@@ -147,9 +149,10 @@ export function clientIp(req) {
 export function createSession(req, res, userId, { add = false } = {}) {
   const token = crypto.randomBytes(32).toString('base64url');
   const now = Date.now();
-  run(`INSERT INTO sessions (token, user_id, created_at, expires_at, user_agent, ip, last_used)
-       VALUES (:token, :uid, :now, :exp, :ua, :ip, :now)`,
-  { token: hashToken(token), uid: userId, now, exp: now + SESSION_MS, ua: String(req.headers['user-agent'] || '').slice(0, 300), ip: clientIp(req) });
+  run(`INSERT INTO sessions (token, user_id, created_at, expires_at, user_agent, ip, last_used, country, client)
+       VALUES (:token, :uid, :now, :exp, :ua, :ip, :now, :country, :client)`,
+  { token: hashToken(token), uid: userId, now, exp: now + SESSION_MS, ua: String(req.headers['user-agent'] || '').slice(0, 300),
+    ip: clientIp(req), country: countryOf(req), client: clientOf(req) });
   // Signing in to an account that's already in the switcher replaces that entry.
   const keep = add ? browserAccounts(req).filter((a) => a.user.id !== userId).map((a) => a.token) : [];
   if (add && keep.length >= MAX_ACCOUNTS) fail(400, `You can be signed in to up to ${MAX_ACCOUNTS} accounts at once.`);
@@ -176,7 +179,8 @@ export function currentSession(req) {
   { h, now: Date.now() });
   if (!row) return null;
   if (Date.now() - (row.s_last_used || 0) > 60_000) {
-    run('UPDATE sessions SET last_used = :now, ip = :ip WHERE token = :h', { now: Date.now(), ip: clientIp(req), h });
+    run('UPDATE sessions SET last_used = :now, ip = :ip, country = COALESCE(:country, country) WHERE token = :h',
+      { now: Date.now(), ip: clientIp(req), country: countryOf(req), h });
   }
   const { s_token, s_last_used, ...user } = row;
   return { user, tokenHash: s_token };
@@ -325,6 +329,8 @@ export function selfUser(u) {
     settings: {
       dmPolicy: u.dm_policy,
       discoverable: !!u.discoverable,
+      language: u.language || null,
+      showClient: u.show_client !== 0,
       notifPrefs: { ...Object.fromEntries(NOTIF_TYPES.map((t) => [t, true])), ...parseJson(u.notif_prefs, {}) },
       mutedWords: parseJson(u.muted_words, []),
     },
@@ -339,7 +345,7 @@ export const miniUser = (r) => ({
 });
 
 export const POST_SELECT = `
-  SELECT p.id, p.author_id, p.text, p.image, p.images, p.sensitive, p.cw, p.edited_at, p.reply_policy, p.views, p.hidden_reply,
+  SELECT p.id, p.author_id, p.text, p.image, p.images, p.sensitive, p.cw, p.edited_at, p.reply_policy, p.views, p.hidden_reply, p.client, p.video,
          p.reply_to, p.quote_of, p.deleted, p.created_at, p.remote_uri,
          u.id AS uid, u.handle, u.name, u.avatar, u.avatar_shape, u.hue, u.verified, u.domain, u.flags,
          MAX((SELECT COUNT(*) FROM likes WHERE post_id = p.id), COALESCE(p.fed_likes, 0)) AS likes,
@@ -358,13 +364,18 @@ export function postImages(r) {
   return r.image ? [{ src: r.image, alt: '' }] : [];
 }
 
+export function postVideo(r) {
+  const v = parseJson(r.video, null);
+  return v && typeof v.src === 'string' ? { src: v.src, poster: typeof v.poster === 'string' ? v.poster : null, alt: String(v.alt || '') } : null;
+}
+
 function rowToPost(r) {
   if (r.deleted) return { id: r.id, deleted: true };
   const images = postImages(r);
   return {
     id: r.id, uri: r.remote_uri || `${DOMAIN}/${r.id}`, remote: !!r.remote_uri,
-    text: r.text, image: images[0]?.src || null, images, sensitive: !!r.sensitive, cw: r.cw || '',
-    editedAt: r.edited_at || null, replyPolicy: r.reply_policy || 'everyone', createdAt: r.created_at,
+    text: r.text, image: images[0]?.src || null, images, video: postVideo(r), sensitive: !!r.sensitive, cw: r.cw || '',
+    editedAt: r.edited_at || null, replyPolicy: r.reply_policy || 'everyone', client: r.client || null, createdAt: r.created_at,
     _authorFollowsMe: !!r.author_follows_me,
     author: miniUser(r),
     replyTo: r.reply_to, quoteOf: r.quote_of,
@@ -459,6 +470,23 @@ export function notify(userId, actorId, type, postId = null) {
   }
   run('INSERT INTO notifications (user_id, actor_id, type, post_id, created_at) VALUES (:u, :a, :type, :p, :t)',
     { u: userId, a: actorId, type, p: postId, t: Date.now() });
+  publish(userId, 'notification', () => {
+    const a = get('SELECT id, handle, name, avatar, hue, domain, verified FROM users WHERE id = :id', { id: actorId });
+    const p = postId ? get('SELECT id, text, cw FROM posts WHERE id = :id AND deleted = 0', { id: postId }) : null;
+    return {
+      type, createdAt: Date.now(),
+      actor: a && { id: a.id, handle: a.handle, name: a.name, avatar: a.avatar, hue: a.hue, domain: a.domain, verified: !!a.verified },
+      post: p && { id: p.id, text: p.text.slice(0, 280), cw: p.cw },
+    };
+  });
+}
+
+// Tell a user's open streams that someone sent them a message.
+export function publishMessage(recipientId, senderId, text) {
+  publish(recipientId, 'message', () => {
+    const a = get('SELECT id, handle, name, avatar, hue, domain FROM users WHERE id = :id', { id: senderId });
+    return { from: a && { id: a.id, handle: a.handle, name: a.name, avatar: a.avatar, hue: a.hue, domain: a.domain }, text: String(text).slice(0, 280), createdAt: Date.now() };
+  });
 }
 
 // Notify locally-mentioned users in a post's text. `authorDomain` resolves bare @handles for remote authors.
@@ -473,7 +501,7 @@ export function notifyMentions(text, authorId, postId, authorDomain = null, skip
 
 // Soft-delete a post and remove everything attached to it.
 export function softDeletePost(id) {
-  run(`UPDATE posts SET deleted = 1, text = '', cw = '', image = NULL, images = NULL WHERE id = :id`, { id });
+  run(`UPDATE posts SET deleted = 1, text = '', cw = '', image = NULL, images = NULL, video = NULL WHERE id = :id`, { id });
   run('DELETE FROM polls WHERE post_id = :id', { id });
   for (const t of ['likes', 'reposts', 'bookmarks', 'notifications']) run(`DELETE FROM ${t} WHERE post_id = :id`, { id });
   run('UPDATE users SET pinned_post_id = NULL WHERE pinned_post_id = :id', { id });

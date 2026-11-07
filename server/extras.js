@@ -7,6 +7,8 @@ import {
 } from './core.js';
 import { preparePost, insertPost, deleteAccount } from './api.js';
 import { findBlocked } from './wordfilter.js';
+import { clientOf } from './locale.js';
+import { markVideoUsed } from './media.js';
 
 const DAY = 86400_000;
 const MAX_LISTS = 50;
@@ -130,7 +132,7 @@ route('GET', '/api/scheduled', ({ me }) => ({
                   ORDER BY status = 'pending' DESC, publish_at ASC LIMIT 100`, { me: me.id, since: Date.now() - 7 * DAY }).map(scheduledOut),
 }));
 
-route('POST', '/api/scheduled', ({ me, body }) => {
+route('POST', '/api/scheduled', ({ req, me, body }) => {
   rateLimit(`schedule:${me.id}`, 30, 3600_000);
   const at = Number(body.publishAt);
   if (!Number.isFinite(at) || at < Date.now() + 60_000) fail(400, 'Pick a time at least a minute from now.');
@@ -140,10 +142,12 @@ route('POST', '/api/scheduled', ({ me, body }) => {
   const prepared = preparePost(me, body, { allowReply: false }); // validates now and stores images
   const payload = {
     text: prepared.text, cw: prepared.cw, savedImages: prepared.images, sensitive: prepared.sensitive,
-    poll: body.poll || null, replyPolicy: prepared.replyPolicy, quoteOf: prepared.quoteOf?.id || null,
+    savedVideo: prepared.video ? { src: prepared.video.src, poster: prepared.video.poster, alt: prepared.video.alt } : null,
+    poll: body.poll || null, replyPolicy: prepared.replyPolicy, quoteOf: prepared.quoteOf?.id || null, client: clientOf(req),
   };
   const r = run(`INSERT INTO scheduled_posts (author_id, payload, publish_at, created_at) VALUES (:me, :p, :at, :t)`,
     { me: me.id, p: JSON.stringify(payload), at: Math.round(at), t: Date.now() });
+  if (prepared.video) markVideoUsed(prepared.video.mediaId, -Number(r.lastInsertRowid)); // reserved until it's published
   return { scheduled: scheduledOut(get('SELECT * FROM scheduled_posts WHERE id = :id', { id: Number(r.lastInsertRowid) })) };
 });
 
@@ -176,7 +180,7 @@ function publishScheduled(s) {
     // A quoted post may have been deleted meanwhile: publish without the quote instead of failing.
     if (payload.quoteOf && !get('SELECT 1 AS x FROM posts WHERE id = :id AND deleted = 0', { id: payload.quoteOf })) payload.quoteOf = null;
     const prepared = preparePost(author, payload, { allowReply: false });
-    const id = insertPost(author, prepared);
+    const id = insertPost(author, { ...prepared, client: payload.client });
     run(`UPDATE scheduled_posts SET status = 'published', post_id = :p, error = NULL WHERE id = :id`, { p: id, id: s.id });
     return id;
   } catch (e) {

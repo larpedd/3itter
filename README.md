@@ -37,6 +37,8 @@ Admin CLI: `npm run admin -- promote|moderator|demote|verify|unverify|unsuspend 
 
 - **Posting:** up to 500 characters, replies and threads, quote posts, reposts, likes, bookmarks, and **pinned posts**.
 - **Media:** up to **4 images** per post with **alt text**, a gallery viewer, **sensitive-media** blur, and paste or drag-and-drop uploads.
+- **Video:** one MP4, WebM or MOV per post (default limit 50 MB, `MAX_VIDEO_MB`). It uploads as soon as you pick it, with a progress bar. The poster frame is taken in the browser, so the server never decodes video. Videos stream with HTTP range requests, federate (the file stays on its home instance; the poster is copied) and show as `og:video` in link previews.
+- **Profile picture editor:** drag to position, pinch / scroll / slider to zoom, rotate, previewed in your avatar shape (banners get a 3:1 frame). GIFs can keep their animation.
 - **Content warnings:** a post can hide behind a short warning.
 - **Polls:** 2–4 choices, single or multiple choice, open from 1 hour to 7 days. Polls work across federated instances.
 - **Editing:** posts can be edited for 30 minutes, with an "Edited" label and the full edit history.
@@ -66,9 +68,12 @@ Admin CLI: `npm run admin -- promote|moderator|demote|verify|unverify|unsuspend 
   From there admins can suspend an account, change its handle, reset its display name, clear its bio or delete it.
 - **Account switcher:** stay signed in to up to 5 accounts in one browser and switch from the account menu (or the mobile drawer). Logging out moves you to the next account. Tokens stay in HttpOnly cookies.
 - **Mobile:** a navigation drawer from your avatar, a bottom bar and compose button that hide while you scroll, pull-to-refresh, and bigger touch targets.
-- **Desktop notifications** while 3itter is open in a background tab (Settings → Notifications).
+- **Realtime:** notifications, messages and unread badges arrive instantly over Server-Sent Events (`/api/stream`), with a snackbar in the app or a desktop notification when the tab is in the background (Settings → Notifications).
+- **"3itter for …":** posts show the device they were written on (3itter for Android, iPhone, Windows, Mac…). It can be turned off in Settings → Privacy & safety.
+- **Languages:** English, Polski, Deutsch, Español, Français, Português and Українська. The language is picked automatically from where you sign in (Cloudflare's country header, then the browser) and can be changed in Settings → Language or on the landing page. Translations live in `public/js/i18n/strings.js` and are shared with the Android app.
+- **Devices & sessions:** every signed-in browser and app, with device, approximate country, IP and last activity. Sign out one or all others.
 - **Link previews:** Open Graph / Twitter Card tags, oEmbed and a Mastodon-compatible status endpoint, so shared links get FixupX-style embeds in Discord and others.
-- **Timelines:** "For you" (engagement × recency) and "Following".
+- **Timelines:** "Following", and a personalised **"For you"** (`server/feed.js`): engagement, people you follow, what they liked or reposted, accounts you interact with, freshness, a damper so one account can't flood the feed, and stable paging.
 - **Profiles:** banner, avatar photo, 14 avatar **shapes**, colour, **pronouns**, up to 4 **pride flags**, and a **verified badge**.
 - **Safety:** **block**, **mute**, **report** posts or accounts, and choose who can DM you (everyone / people you follow / no one).
 - **Account:** change password, see and sign out sessions, **download your data** (JSON), **delete your account**.
@@ -89,11 +94,15 @@ Admin CLI: `npm run admin -- promote|moderator|demote|verify|unverify|unsuspend 
 
 ## Android app
 
-`android/` contains the 3itter Android client: a Rust ([Tauri v2](https://tauri.app)) app around the system WebView.
+`android/` is a **native** Android client written in Rust. The UI is [Slint](https://slint.dev) (`android/ui/*.slint`), drawn by Skia in a `NativeActivity`. There is no WebView, and no Java code apart from Slint's small built-in keyboard helper.
 
-- It starts on an **instance picker**: enter any 3itter instance's address. The picker checks `/.well-known/3itter` to make sure the server really runs 3itter, remembers it, and opens it next time.
-- Inside an instance, the web app knows it's running in the app. The sign-in screen and the account menu get a **Switch instance** button that returns to the picker, so you can change instances after logging out.
-- Build a signed APK with `android/build-apk.sh`. You need Rust (rustup) with Android targets, JDK 17, the Android SDK and the NDK. The script expects them in `~/.local/opt/android-build`; override that with `TOOLCHAIN=...`.
+- **Screens:** instance picker, sign in / sign up, home ("For you" / "Following"), explore (trends, who to follow, search for posts and people), notifications, messages and chats, profiles, threads with quick reply, a composer, settings, devices & sessions, and language.
+- **Instance picker:** enter any 3itter instance's address. The app checks `/.well-known/3itter`, remembers instances and their sign-ins, and can switch instances at any time.
+- **Same server, same language:** the app speaks the JSON API, signs posts as "3itter for Android", and uses the instance's translation table (and its automatic language choice).
+- **Notifications:** while the app is running it keeps the realtime stream open. New activity and messages update the badges live and become Android notifications ("Activity" and "Messages" channels) when the app isn't on screen. Fully closed apps get nothing until next launch: real push would need a push service (FCM).
+- **Videos** show their poster frame with a play badge; playback is in the web app.
+- Develop on the desktop with `cargo run` in `android/`. `ITTER_SCRIPT=steps.txt` renders headlessly with the software renderer and takes screenshots (see `src/main.rs`).
+- Build a signed APK with `android/build-apk.sh`. You need Rust (rustup) with the Android targets, a JDK, the Android SDK (build-tools, a platform) and the NDK. The script expects them in `~/.local/opt/android-build`; override that with `TOOLCHAIN=...`. It builds `libitter.so`, packs it with `aapt2`, aligns it for 16 KB pages and signs it.
   It creates a signing key next to the toolchain on first run. Keep that key: every update must be signed with it.
 
 ## Federation (3itter ↔ 3itter only)
@@ -131,7 +140,9 @@ Then search `@yourhandle@127.0.0.1:3002` on A.
 
 Rainbow and transgender flag graphics are from [Twemoji](https://github.com/jdecked/twemoji), © Twitter, Inc. and other
 contributors, licensed [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/). Twemoji only covers Unicode emoji, so the
-other pride flags in `public/flags/` were drawn for 3itter in the same style. Fonts: Roboto Flex and Material Symbols (Google Fonts).
+other pride flags in `public/flags/` were drawn for 3itter in the same style. Fonts: Roboto Flex and Material Symbols (Google Fonts);
+the Android app bundles a subset of Material Symbols Rounded (Apache 2.0) in `android/ui/fonts/`. The Android UI uses [Slint](https://slint.dev)
+under its royalty-free license.
 
 ## Layout
 

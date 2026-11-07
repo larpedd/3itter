@@ -1,4 +1,5 @@
 // Route views. Each returns { el, title, cache?, enter?, leave?, destroy? }.
+import { t as tr, locale } from './lib/i18n.js';
 import { html, el } from './lib/html.js';
 import { api } from './lib/api.js';
 import { state, on, emit } from './store.js';
@@ -210,7 +211,7 @@ function notifItem(n) {
     <div class="notif-main">
       <div class="notif-avatars">${n.actors.map((a) => avatar(a, 'sm', { link: false }))}</div>
       <div class="notif-text">${actorsText(n)} ${t.text} <span class="post-handle">· ${relTime(n.createdAt)}</span></div>
-      ${n.post?.text || n.post?.cw ? html`<div class="notif-snippet">${n.post.cw ? `⚠ ${n.post.cw}` : n.post.text}</div>` : ''}
+      ${n.post?.text || n.post?.cw ? html`<div class="notif-snippet" translate="no">${n.post.cw ? `⚠ ${n.post.cw}` : n.post.text}</div>` : ''}
     </div>
   </a>`;
 }
@@ -224,7 +225,7 @@ export function notificationsView(params, query) {
       <a class="tab" href="/notifications?filter=mentions" ${filter === 'mentions' ? html`aria-current="page"` : ''}><span>Mentions</span></a></nav>`,
   })}</div>`);
   let marked = false;
-  root.append(infiniteList({
+  const makeList = () => infiniteList({
     load: async (offset) => {
       const r = await api(`/notifications?offset=${offset}${filter === 'mentions' ? '&filter=mentions' : ''}`);
       if (!marked) {
@@ -237,8 +238,16 @@ export function notificationsView(params, query) {
     empty: filter === 'mentions'
       ? emptyState({ icon: 'alternate_email', title: 'No mentions yet', body: 'Replies, mentions and quotes of your posts show up here.', shape: 'clover4' })
       : emptyState({ icon: 'notifications', title: 'No notifications yet', body: 'Likes, replies, reposts and new followers will show up here.', shape: 'sunny' }),
-  }));
-  return { el: root, title: 'Notifications' };
+  });
+  root.append(makeList());
+  // Realtime: something new arrived while this page is open, so reload the list (and mark it read).
+  let pending = null;
+  const offRealtime = on('realtime:notification', (n) => {
+    if (filter === 'mentions' && !['reply', 'mention', 'quote'].includes(n.type)) return;
+    clearTimeout(pending);
+    pending = setTimeout(() => { marked = false; root.querySelector('.ilist')?.replaceWith(makeList()); }, 400);
+  });
+  return { el: root, title: 'Notifications', destroy: () => { offRealtime(); clearTimeout(pending); } };
 }
 
 // ---------------------------------------------------------------- messages
@@ -264,7 +273,7 @@ export function messagesView() {
         ${avatar(c.user, 'md', { link: false })}
         <div class="li-text">
           <div class="conv-top"><span class="li-head">${nameOf(c.user)}</span><span class="post-handle">@${c.user.handle} · ${relTime(c.last.createdAt)}</span></div>
-          <div class="li-sub conv-last">${c.last.mine ? 'You: ' : ''}${c.last.text}</div>
+          <div class="li-sub conv-last">${c.last.mine ? 'You: ' : ''}<span translate="no">${c.last.text}</span></div>
         </div>
         ${c.unread ? html`<span class="unread-dot" aria-label="${c.unread} unread"></span>` : ''}
       </a>`)}</div>`);
@@ -317,9 +326,14 @@ export async function threadView({ handle }) {
       const fresh = r.messages.filter((m) => !msgs.some((x) => x.id === m.id));
       if (fresh.length) { const stick = nearBottom(); msgs.push(...fresh); draw(stick); emit('badges:refresh'); }
     } catch { /* keep polling */ }
-    if (polling) timer = setTimeout(poll, 3000);
+    if (polling) timer = setTimeout(poll, 15_000); // realtime events do the work; this is a fallback
   };
-  let timer = setTimeout(poll, 3000);
+  let timer = setTimeout(poll, 15_000);
+  // New message from this person: fetch it right away.
+  const offRealtime = on('realtime:message', (m) => {
+    const from = m.from?.domain ? `${m.from.handle}` : m.from?.handle;
+    if (from && from.toLowerCase() === u.handle.toLowerCase() && polling) { clearTimeout(timer); poll(); }
+  });
 
   thread.addEventListener('click', async (e) => {
     const del = e.target.closest('[data-del]');
@@ -347,7 +361,7 @@ export async function threadView({ handle }) {
   if (!data.blockedReason) requestAnimationFrame(() => form.text.focus({ preventScroll: true }));
   return {
     el: root, title: `${u.name} – Messages`, cls: 'is-thread',
-    destroy: () => { polling = false; clearTimeout(timer); },
+    destroy: () => { polling = false; clearTimeout(timer); offRealtime(); },
   };
 }
 
@@ -374,7 +388,7 @@ const PROFILE_TABS = [['', 'Posts'], ['replies', 'Replies'], ['media', 'Media'],
 
 function profileHeader(u, tab) {
   const isMe = u.id === state.me.id;
-  const joined = new Date(u.createdAt).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+  const joined = new Date(u.createdAt).toLocaleDateString(locale(), { month: 'long', year: 'numeric' });
   const hiddenFeed = u.isBlocked || u.blocksYou;
   return html`<section class="profile" data-user-card="${u.handle}">
     <div class="profile-banner" style="--uh:${u.hue}">
@@ -393,12 +407,12 @@ function profileHeader(u, tab) {
       ${u.suspended ? html`<p class="profile-alert">${icon('block', 'sm')}This account is suspended. Only staff can see it.</p>` : ''}
       <h2 class="profile-name headline-medium emph">${nameOf(u)} ${staffBadge(u.staff)}</h2>
       <div class="profile-handle"><span class="post-handle">@${u.handle}</span>
-        ${u.pronouns ? html`<span class="pronouns">${u.pronouns}</span>` : ''}
+        ${u.pronouns ? html`<span class="pronouns" translate="no">${u.pronouns}</span>` : ''}
         ${u.followsYou ? html`<span class="tag">Follows you</span>` : ''}${u.isMuted ? html`<span class="tag">Muted</span>` : ''}
         ${remoteChip(u)}</div>
       ${u.bio ? html`<p class="profile-bio">${richText(u.bio, { domain: u.domain })}</p>` : ''}
       <div class="profile-meta">
-        ${u.location ? html`<span>${icon('location_on', 'xs')}${u.location}</span>` : ''}
+        ${u.location ? html`<span>${icon('location_on', 'xs')}<span translate="no">${u.location}</span></span>` : ''}
         ${u.website ? html`<span>${icon('link', 'xs')}<a class="link" href="${u.website}" target="_blank" rel="noopener noreferrer nofollow">${u.website.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '')}</a></span>` : ''}
         <span>${icon('calendar_month', 'xs')}Joined ${joined}</span>
       </div>
@@ -485,7 +499,7 @@ export async function postView({ id }) {
   const data = await api(`/posts/${id}`);
   const p = data.post;
   const root = el(html`<div class="view">
-    ${topBar({ back: true, title: 'Post' })}
+    ${topBar({ back: true, title: tr('Post|noun') })}
     <div class="seg thread-list">
       ${data.ancestors.map((a) => postCard(a, { threadDown: true, hideReplyCtx: true }))}
       ${mainPost(p)}

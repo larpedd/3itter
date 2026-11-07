@@ -15,6 +15,7 @@ import { listsView, listView, scheduledView, openListPicker } from './listsView.
 import { adminView } from './adminView.js';
 import { termsView, privacyView } from './docs.js';
 import { passkeysSupported, conditionalMediationAvailable, signInWithPasskey, registerPasskey } from './lib/webauthn.js';
+import { t as tr, setLanguage, resolveLanguage, storedLanguage, storeLanguage, locale, languageName, LANGUAGES } from './lib/i18n.js';
 
 let APP_NAME = '3itter';
 installMotion();
@@ -131,26 +132,63 @@ async function loadSidebar() {
 
 // ---------------------------------------------------------------- badges
 
-let lastNotifCount = null;
 async function updateBadges() {
   if (!state.me) return;
   try { state.badges = await api('/badges'); } catch { return; }
   emit('badges');
-  // Desktop notifications (opt-in) while the tab is in the background.
-  const n = state.badges.notifications || 0;
-  if (lastNotifCount !== null && n > lastNotifCount && document.hidden && getTheme().desktopNotifs && window.Notification?.permission === 'granted') {
-    try {
-      const { notifications } = await api('/notifications');
-      const top = notifications.find((x) => !x.read);
-      if (top) {
-        const verb = { like: 'liked your post', repost: 'reposted your post', follow: 'followed you', reply: 'replied to you', mention: 'mentioned you', quote: 'quoted your post' }[top.type] || 'interacted with you';
-        const who = top.actorCount > 1 ? `${top.actor.name} and ${top.actorCount - 1} other${top.actorCount === 2 ? '' : 's'}` : top.actor.name;
-        const note = new Notification(`${who} ${verb}`, { body: top.post?.cw || top.post?.text || '', icon: '/icon-192.png', tag: `3itter-${top.id}` });
-        note.onclick = () => { window.focus(); navigate(top.post ? `/p/${top.post.id}` : '/notifications'); note.close(); };
-      }
-    } catch { /* ignore */ }
+}
+
+// ---------------------------------------------------------------- realtime (Server-Sent Events)
+
+const VERBS = { like: 'liked your post', repost: 'reposted your post', follow: 'followed you', reply: 'replied to you', mention: 'mentioned you', quote: 'quoted your post' };
+let stream = null;
+let streamRetry = 0;
+
+// A desktop notification while the tab is in the background (opt-in), otherwise a snackbar.
+function announce({ title, body, href, tag }) {
+  if (document.hidden) {
+    if (getTheme().desktopNotifs && window.Notification?.permission === 'granted') {
+      try {
+        const note = new Notification(title, { body, icon: '/icon-192.png', tag });
+        note.onclick = () => { window.focus(); navigate(href); note.close(); };
+      } catch { /* ignore */ }
+    }
+    return;
   }
-  lastNotifCount = n;
+  toast(body ? `${title}: ${body.length > 80 ? `${body.slice(0, 79)}…` : body}` : title, { action: tr('View'), onAction: () => navigate(href) });
+}
+
+function connectStream() {
+  if (!state.me || !window.EventSource) return;
+  stream?.close();
+  stream = new EventSource('/api/stream');
+  stream.addEventListener('open', () => { streamRetry = 0; });
+  stream.addEventListener('badges', (e) => {
+    try { state.badges = { ...state.badges, ...JSON.parse(e.data) }; emit('badges'); } catch { /* ignore */ }
+  });
+  stream.addEventListener('notification', (e) => {
+    let n;
+    try { n = JSON.parse(e.data); } catch { return; }
+    emit('realtime:notification', n);
+    if (location.pathname === '/notifications') return;
+    const who = n.actor?.name || n.actor?.handle || '';
+    announce({ title: `${who} ${tr(VERBS[n.type] || 'interacted with you')}`, body: n.post?.cw || n.post?.text || '', href: n.post ? `/p/${n.post.id}` : `/u/${n.actor?.handle}`, tag: `3itter-n-${n.type}-${n.post?.id || n.actor?.id}` });
+  });
+  stream.addEventListener('message', (e) => {
+    let m;
+    try { m = JSON.parse(e.data); } catch { return; }
+    emit('realtime:message', m);
+    const handle = m.from?.handle || '';
+    if (location.pathname.toLowerCase() === `/messages/${handle}`.toLowerCase()) return;
+    announce({ title: tr('New message from {name}', { name: m.from?.name || handle }), body: m.text, href: `/messages/${handle}`, tag: `3itter-m-${handle}` });
+  });
+  stream.addEventListener('error', () => {
+    // EventSource reconnects by itself; if the server refuses (signed out), stop.
+    if (stream.readyState === EventSource.CLOSED) {
+      stream = null;
+      setTimeout(connectStream, Math.min(60_000, 2000 * 2 ** streamRetry++));
+    }
+  });
 }
 on('badges', () => {
   document.querySelectorAll('[data-badge]').forEach((b) => {
@@ -163,7 +201,7 @@ on('badges', () => {
   if (total) document.title = `(${total > 99 ? '99+' : total}) ${document.title}`;
 });
 on('badges:refresh', updateBadges);
-setInterval(updateBadges, 20_000);
+setInterval(updateBadges, 60_000); // fallback; badges normally arrive over the stream
 document.addEventListener('visibilitychange', updateBadges);
 
 // ---------------------------------------------------------------- router
@@ -259,7 +297,7 @@ async function render() {
 
 function finish(view) {
   renderAnnouncements();
-  document.title = `${view.title} / ${APP_NAME}`;
+  document.title = `${tr(view.title)} / ${APP_NAME}`;
   emit('badges');
   document.body.classList.toggle('is-thread', view.cls === 'is-thread');
 }
@@ -455,7 +493,7 @@ async function openDrawer() {
           <a href="/u/${state.me.handle}/followers"><b>${compact(state.me.counts?.followers || 0)}</b> Followers</a></div>
       </div>
       ${accounts.length > 1 ? html`<div class="drawer-accounts">${accounts.filter((a) => !a.active).map((a) => html`<button class="drawer-acct" type="button" data-switch="${a.id}" aria-label="Switch to @${a.handle}">
-          ${avatar(a, 'sm', { link: false })}<span>@${a.handle}</span></button>`)}</div>` : ''}
+          ${avatar(a, 'sm', { link: false })}<span class="da-text"><span class="da-name">${nameOf(a)}</span><span class="da-handle">@${a.handle}</span></span>${icon('swap_horiz', 'sm')}</button>`)}</div>` : ''}
       <div class="drawer-items">${items.map(([ic, l, href]) => html`<a class="rail-item" href="${href}" ${location.pathname === href ? html`aria-current="page"` : ''}>
           <span class="ri-icon">${icon(ic)}</span><span class="ri-label">${l}</span></a>`)}</div>
       <div class="menu-divider"></div>
@@ -851,7 +889,7 @@ const FEATURES = [
 // Landing + sign-in. `add`: adding another account to the switcher while signed in.
 function renderAuth({ add = false } = {}) {
   document.body.dataset.route = 'auth';
-  document.title = add ? `Add an account / ${APP_NAME}` : `${APP_NAME} — Happening in every shape`;
+  document.title = add ? `${tr('Add an account')} / ${APP_NAME}` : `${APP_NAME} — ${tr('Happening in every shape')}`;
   const inst = state.instance || {};
   const open = inst.registrationsOpen !== false;
   let mode = add ? 'login' : open ? 'signup' : 'login';
@@ -861,6 +899,7 @@ function renderAuth({ add = false } = {}) {
       <header class="land-top">
         <a class="brand" href="/"><span class="brand-mark shape-sunny"></span><span class="brand-name">${APP_NAME}</span></a>
         <div class="land-top-actions">
+          <button class="btn text lang-btn" type="button" data-lang-menu aria-label="Language">${icon('translate', 'sm')}<span translate="no">${languageName(locale())}</span></button>
           ${APP_CLIENT ? html`<button class="chip instance-chip" type="button" data-switch-instance>${icon('dns', 'sm')}${inst.domain || location.host}${icon('swap_horiz', 'sm')}</button>` : ''}
           ${add ? html`<button class="btn text" type="button" data-cancel-add>${icon('close', 'sm')}Cancel</button>`
     : html`<button class="btn tonal" type="button" data-goto="login">Sign in</button>`}
@@ -957,6 +996,13 @@ function renderAuth({ add = false } = {}) {
       setTimeout(() => form.querySelector(go.dataset.goto === 'signup' ? '[name=name]' : '[name=handle]')?.focus({ preventScroll: true }), 350);
     }
     if (e.target.closest('[data-switch-instance]')) switchInstance();
+    const lb = e.target.closest('[data-lang-menu]');
+    if (lb) {
+      openMenu(lb, LANGUAGES.map((l) => ({
+        icon: l.code === locale() ? 'check' : 'translate', label: l.name,
+        onSelect: async () => { storeLanguage(l.code); await setLanguage(l.code); conditional?.abort(); renderAuth({ add }); },
+      })));
+    }
     if (e.target.closest('[data-cancel-add]')) { conditional?.abort(); location.href = '/'; }
   });
   form.addEventListener('submit', async (e) => {
@@ -971,7 +1017,10 @@ function renderAuth({ add = false } = {}) {
     btn.disabled = true;
     try {
       const body = { handle: form.handle.value.trim().replace(/^@/, ''), password: form.password.value, add };
-      if (mode === 'signup') { body.name = form.name.value.trim() || body.handle; body.acceptTerms = true; if (form.invite) body.invite = form.invite.value.trim(); }
+      if (mode === 'signup') {
+        body.name = form.name.value.trim() || body.handle; body.acceptTerms = true; body.language = storedLanguage();
+        if (form.invite) body.invite = form.invite.value.trim();
+      }
       const { user } = await api(`/auth/${mode}`, { method: 'POST', body });
       conditional?.abort();
       if (add) { location.href = '/'; return; }
@@ -1030,14 +1079,16 @@ async function addPasskeyNow() {
 function renderPublicDoc() {
   const view = location.pathname === '/terms' ? termsView({ standalone: true }) : privacyView({ standalone: true });
   document.body.dataset.route = 'doc';
-  document.title = `${view.title} / ${APP_NAME}`;
+  document.title = `${tr(view.title)} / ${APP_NAME}`;
   app.replaceChildren(view.el);
   scrollTo(0, 0);
 }
 
 // ---------------------------------------------------------------- boot
 
-function start(user) {
+async function start(user) {
+  const lang = resolveLanguage({ user, detected: state.instance?.detectedLanguage });
+  if (lang !== locale()) await setLanguage(lang);
   state.me = user;
   window.__profileHue = user.hue;
   applyTheme(getTheme(), user.hue);
@@ -1045,10 +1096,11 @@ function start(user) {
   const wantsCompose = new URLSearchParams(location.search).get('compose') === '1'; // PWA shortcut
   history.replaceState({ key: newKey(), depth: 0 }, '', wantsCompose ? '/' : location.pathname + location.search);
   render();
+  connectStream();
   if (wantsCompose) setTimeout(() => openComposer(), 300);
   try {
     const switched = sessionStorage.getItem('3itter-switched');
-    if (switched) { sessionStorage.removeItem('3itter-switched'); setTimeout(() => toast(`Switched to @${switched}`), 400); }
+    if (switched) { sessionStorage.removeItem('3itter-switched'); setTimeout(() => toast(tr('Switched to @{handle}', { handle: switched })), 400); }
   } catch { /* ignore */ }
 }
 
@@ -1059,6 +1111,7 @@ function start(user) {
     state.instance = inst;
     if (inst?.name) APP_NAME = inst.name;
     if (user) return start(user);
+    await setLanguage(resolveLanguage({ user: null, detected: inst?.detectedLanguage }));
     if (location.pathname === '/terms' || location.pathname === '/privacy') renderPublicDoc();
     else renderAuth();
     addEventListener('popstate', () => { if (!state.me) (location.pathname === '/terms' || location.pathname === '/privacy' ? renderPublicDoc : renderAuth)(); });

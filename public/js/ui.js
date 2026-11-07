@@ -2,14 +2,18 @@
 import { html, raw, esc, el, frag } from './lib/html.js';
 import { state, remember } from './store.js';
 import { FLAG_BY_ID, flagSrc } from './lib/flags.js';
+import { t, locale } from './lib/i18n.js';
 
 // ---------------------------------------------------------------- formatting
 
-export const icon = (name, cls = '') => html`<span class="icon ${cls}" aria-hidden="true">${name}</span>`;
+export const icon = (name, cls = '') => html`<span class="icon ${cls}" aria-hidden="true" translate="no">${name}</span>`;
 
 export const handleOf = (u) => `@${u.handle}`;
-const nf = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 });
-export const compact = (n) => nf.format(n || 0);
+let nf = null;
+export const compact = (n) => {
+  if (nf?.resolvedOptions().locale.split('-')[0] !== locale()) nf = new Intl.NumberFormat(locale(), { notation: 'compact', maximumFractionDigits: 1 });
+  return nf.format(n || 0);
+};
 
 export function relTime(ts) {
   const s = (Date.now() - ts) / 1000;
@@ -19,10 +23,10 @@ export function relTime(ts) {
   if (s < 7 * 86400) return `${Math.floor(s / 86400)}d`;
   const d = new Date(ts);
   const sameYear = d.getFullYear() === new Date().getFullYear();
-  return d.toLocaleDateString(undefined, sameYear ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' });
+  return d.toLocaleDateString(locale(), sameYear ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
-export const fullTime = (ts) => new Date(ts).toLocaleString(undefined,
+export const fullTime = (ts) => new Date(ts).toLocaleString(locale(),
   { hour: 'numeric', minute: '2-digit', month: 'short', day: 'numeric', year: 'numeric' });
 
 const TOKEN_RE = /(https?:\/\/[^\s<>"]+[^\s<>".,:;'!?)\]])|(^|[^\w@])@([A-Za-z0-9_]{1,15})(?:@([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*(?::\d{1,5})?))?(?![\w@])|(^|[^\p{L}\p{N}_&])#([\p{L}\p{N}_]{1,50})/gu;
@@ -54,7 +58,7 @@ export function richText(text, { domain = null } = {}) {
   // Render the two Unicode pride flags with their Twemoji artwork.
   out = out.replace(/\u{1F3F3}\u{FE0F}?\u200D\u{1F308}/gu, () => String(flagImg('rainbow', 'inline')))
     .replace(/\u{1F3F3}\u{FE0F}?\u200D\u26A7\u{FE0F}?/gu, () => String(flagImg('transgender', 'inline')));
-  return raw(out);
+  return raw(`<span translate="no">${out}</span>`); // user content: never auto-translated
 }
 
 // ---------------------------------------------------------------- avatars & users
@@ -62,7 +66,7 @@ export function richText(text, { domain = null } = {}) {
 export const verifiedBadge = () => html`<span class="vbadge" role="img" aria-label="Verified account" title="Verified account"><span class="vb-shape shape-sunny"></span><span class="icon filled">check</span></span>`;
 export const staffBadge = (role) => (role ? html`<span class="staff-badge">${icon(role === 'admin' ? 'shield_person' : 'shield', 'xs')}${role === 'admin' ? 'Admin' : 'Mod'}</span>` : '');
 // Display name, then verified badge, then the person's pride flags.
-export const nameOf = (u) => html`<span class="name"><span class="name-text">${u.name}</span>${u.verified ? verifiedBadge() : ''}${u.flags?.length ? html`<span class="name-flags">${u.flags.map((f) => flagImg(f))}</span>` : ''}</span>`;
+export const nameOf = (u) => html`<span class="name"><span class="name-text" translate="no">${u.name}</span>${u.verified ? verifiedBadge() : ''}${u.flags?.length ? html`<span class="name-flags">${u.flags.map((f) => flagImg(f))}</span>` : ''}</span>`;
 export const flagImg = (id, cls = '') => {
   const f = FLAG_BY_ID.get(id);
   return f ? html`<img class="flag ${cls}" src="${flagSrc(id)}" alt="${f.label} flag" title="${f.label}" draggable="false">` : '';
@@ -120,7 +124,7 @@ export function statsRow(p) {
   const c = p.counts;
   const items = [[c.reposts, 'Repost', 'reposts'], [c.quotes, 'Quote', 'quotes'], [c.likes, 'Like', 'likes']].filter(([n]) => n);
   if (!items.length && !c.views) return html`<div class="post-stats" hidden></div>`;
-  return html`<div class="post-stats">${c.views ? html`<span class="stat-views"><b>${compact(c.views)}</b> View${c.views === 1 ? '' : 's'}</span>` : ''}${items.map(([n, l, k]) => html`<button class="stat-link" type="button" data-action="show-list" data-list="${k}"><b>${compact(n)}</b> ${l}${n === 1 ? '' : 's'}</button>`)}</div>`;
+  return html`<div class="post-stats">${c.views ? html`<span class="stat-views"><b>${compact(c.views)}</b> ${c.views === 1 ? t('View|stat') : t('Views')}</span>` : ''}${items.map(([n, l, k]) => html`<button class="stat-link" type="button" data-action="show-list" data-list="${k}"><b>${compact(n)}</b> ${n === 1 ? t(`${l}|stat`) : t(`${l}s`)}</button>`)}</div>`;
 }
 
 export function quoteCard(q) {
@@ -138,6 +142,17 @@ export function quoteCard(q) {
 export const postImagesOf = (p) => (p.images?.length ? p.images : p.image ? [{ src: p.image, alt: '' }] : []);
 
 function media(p) {
+  if (p.video) {
+    const v = p.video;
+    return html`<div class="media-grid n1 video${p.sensitive ? ' sensitive' : ''}">
+      <div class="media-cell video-cell" data-stop>
+        <video src="${v.src}" ${v.poster ? html`poster="${v.poster}"` : ''} controls playsinline preload="metadata" aria-label="${v.alt || 'Video'}"></video>
+        ${v.alt ? html`<span class="alt-badge" title="${v.alt}">ALT</span>` : ''}
+      </div>
+      ${p.sensitive ? html`<button class="sensitive-cover" type="button" data-action="reveal-media">${icon('visibility_off')}
+        <span class="title-small">Sensitive content</span><span class="sc-btn">Show</span></button>` : ''}
+    </div>`;
+  }
   const imgs = postImagesOf(p);
   if (!imgs.length) return '';
   return html`<div class="media-grid n${imgs.length}${p.sensitive ? ' sensitive' : ''}">
@@ -165,7 +180,7 @@ export function pollView(p) {
     return html`<div class="poll" data-poll-for="${p.id}">${pl.options.map((o, i) => {
       const pct = pl.total ? Math.round((o.votes / pl.total) * 100) : 0;
       return html`<div class="poll-row${pl.closed && o.votes === top && top > 0 ? ' winner' : ''}${pl.voted.includes(i) ? ' mine' : ''}" style="--w:${pct}%">
-        <span class="poll-label">${o.text}${pl.voted.includes(i) ? icon('check_circle', 'xs filled') : ''}</span><span class="poll-pct">${pct}%</span></div>`;
+        <span class="poll-label"><span translate="no">${o.text}</span>${pl.voted.includes(i) ? icon('check_circle', 'xs filled') : ''}</span><span class="poll-pct">${pct}%</span></div>`;
     })}${foot}</div>`;
   }
   return html`<div class="poll" data-poll-for="${p.id}" data-multiple="${String(pl.multiple)}">${pl.options.map((o, i) => html`
@@ -177,10 +192,20 @@ export function pollView(p) {
 function postBody(p) {
   const body = html`${p.text ? html`<div class="post-text">${richText(p.text, { domain: p.author.domain })}</div>` : ''}${media(p)}${pollView(p)}`;
   if (!p.cw) return body;
-  return html`<div class="cw"><div class="cw-head">${icon('warning', 'sm')}<span class="cw-text">${p.cw}</span>
+  return html`<div class="cw"><div class="cw-head">${icon('warning', 'sm')}<span class="cw-text" translate="no">${p.cw}</span>
     <button class="btn tonal xs" type="button" data-action="toggle-cw" aria-expanded="false">Show</button></div>
     <div class="cw-body" hidden>${body}</div></div>`;
 }
+
+// "3itter for Android": where a post was written. Device codes come from server/locale.js.
+const CLIENT_NAMES = {
+  'android-app': 'Android', iphone: 'iPhone', ipad: 'iPad', android: 'Android Web', windows: 'Windows', mac: 'Mac',
+  linux: 'Linux', chromeos: 'ChromeOS', web: 'Web', api: 'API',
+};
+const CLIENT_ICONS = { 'android-app': 'android', iphone: 'phone_iphone', ipad: 'tablet_mac', android: 'smartphone', api: 'terminal' };
+export const clientLabel = (c) => (CLIENT_NAMES[c] ? t('3itter for {device}', { device: t(CLIENT_NAMES[c]) }) : '');
+const clientMeta = (p) => (CLIENT_NAMES[p.client]
+  ? html` · <span class="post-client" title="${t('Posted from this device')}">${icon(CLIENT_ICONS[p.client] || 'computer', 'xs')}${clientLabel(p.client)}</span>` : '');
 
 const editedLabel = (p) => (p.editedAt ? html`<button class="edited" type="button" data-action="edit-history" title="Edited ${fullTime(p.editedAt)}">Edited</button>` : '');
 
@@ -237,7 +262,7 @@ export function mainPost(p) {
     ${replyingTo(p)}
     ${postBody(p)}
     ${p.quote ? quoteCard(p.quote) : ''}
-    <div class="post-meta"><time datetime="${new Date(p.createdAt).toISOString()}">${fullTime(p.createdAt)}</time>${p.editedAt ? html` · ${editedLabel(p)}` : ''}
+    <div class="post-meta"><time datetime="${new Date(p.createdAt).toISOString()}">${fullTime(p.createdAt)}</time>${clientMeta(p)}${p.editedAt ? html` · ${editedLabel(p)}` : ''}
       ${p.replyPolicy !== 'everyone' ? html`<span class="reply-note">${icon(p.replyPolicy === 'following' ? 'group' : 'alternate_email', 'xs')}${REPLY_NOTE[p.replyPolicy]}</span>` : ''}</div>
     ${statsRow(p)}
     ${actionsBar(p, true)}
@@ -390,7 +415,8 @@ export function openPopover(anchor, content, { cls = 'menu', align = 'end' } = {
   const pop = el(`<div class="${cls}"></div>`);
   pop.append(content);
   if (pop.showPopover) pop.setAttribute('popover', 'manual');
-  document.body.append(pop);
+  // Inside a modal dialog everything else is inert, so the menu must live in that dialog to be clickable.
+  (anchor.closest?.('dialog[open]') || document.body).append(pop);
   // The Popover API puts menus in the top layer, above modal dialogs (e.g. the emoji picker in the composer).
   try { pop.showPopover?.(); } catch { /* not supported */ }
   const r = anchor.getBoundingClientRect();
@@ -461,7 +487,8 @@ export function openDialog(content, { cls = '', onClose } = {}) {
     dlg.addEventListener('animationend', done, { once: true });
     setTimeout(done, 260);
   };
-  dlg.addEventListener('cancel', (e) => { e.preventDefault(); close(); });
+  // Only the dialog's own cancel (Escape). A file input inside also fires a bubbling `cancel` when its picker is dismissed.
+  dlg.addEventListener('cancel', (e) => { if (e.target !== dlg) return; e.preventDefault(); close(); });
   dlg.addEventListener('pointerdown', (e) => {
     if (e.target !== dlg) return;
     const r = dlg.getBoundingClientRect();

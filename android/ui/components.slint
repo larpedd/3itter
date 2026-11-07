@@ -1,0 +1,510 @@
+// Building blocks: icons, buttons with shape morphing, avatars, the post card and navigation.
+import { Theme, Type, I18n } from "theme.slint";
+import { Spinner } from "std-widgets.slint";
+
+import "fonts/MaterialSymbolsRounded.ttf";
+import "fonts/MaterialSymbolsRoundedFilled.ttf";
+
+export struct Author {
+    name: string,
+    handle: string,
+    letter: string,
+    color: color,
+    on-color: color,
+    avatar: image,
+    avatar-url: string,
+    verified: bool,
+    pronouns: string,
+}
+
+export struct Post {
+    id: int,
+    author: Author,
+    time: string,
+    full-time: string,
+    text: string,
+    image: image,
+    image-url: string,
+    image-ratio: float,
+    image-count: int,
+    is-video: bool,
+    replies: int,
+    reposts: int,
+    likes: int,
+    views: int,
+    liked: bool,
+    reposted: bool,
+    bookmarked: bool,
+    context: string,
+    context-icon: string,
+    client: string,
+    client-icon: string,
+    cw: string,
+    quote-text: string,
+    quote-author: string,
+    edited: bool,
+}
+
+// Material Symbols glyph, drawn from the bundled icon font (ligatures: "home", "favorite", …).
+export component Icon inherits Text {
+    in property <string> name;
+    in property <bool> filled;
+    in property <length> size: 24px;
+    text: name;
+    font-family: filled ? "Material Symbols Rounded Filled Medium" : "Material Symbols Rounded Medium";
+    font-size: size;
+    color: Theme.on-surface;
+    horizontal-alignment: center;
+    vertical-alignment: center;
+    accessible-role: none;
+}
+
+export component IconButton inherits Rectangle {
+    in property <string> icon;
+    in property <bool> filled;
+    in property <color> tint: Theme.on-surface-variant;
+    in property <color> container: transparent;
+    in property <length> size: 48px;
+    in property <length> icon-size: 24px;
+    in property <string> label;
+    callback clicked();
+    width: size;
+    height: size;
+    border-radius: touch.pressed ? size / 4 : size / 2;
+    background: touch.pressed ? tint.with-alpha(0.14) : touch.has-hover ? tint.with-alpha(0.08) : container;
+    animate background { duration: Theme.fast; }
+    animate border-radius { duration: Theme.default; easing: cubic-bezier(0.34, 1.56, 0.64, 1); }
+    accessible-role: button;
+    accessible-label: label;
+    accessible-action-default => { clicked(); }
+    Icon { name: icon; filled: filled; size: icon-size; color: tint; }
+    touch := TouchArea { clicked => { root.clicked(); } }
+}
+
+// Buttons: filled, tonal, outlined and text. The corners squeeze on press, like M3 Expressive.
+export component Button inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <string> kind: "filled"; // filled | tonal | outlined | text | danger
+    in property <bool> enabled: true;
+    in property <bool> busy;
+    in property <length> button-height: 48px;
+    callback clicked();
+    height: button-height;
+    min-width: 64px;
+    horizontal-stretch: 0;
+    border-radius: touch.pressed ? 12px : button-height / 2;
+    animate border-radius { duration: Theme.default; easing: cubic-bezier(0.34, 1.56, 0.64, 1); }
+    property <color> fg: kind == "filled" ? Theme.on-primary : kind == "tonal" ? Theme.on-secondary-container
+        : kind == "danger" ? #ffffff : Theme.primary;
+    background: !enabled ? Theme.on-surface.with-alpha(0.10)
+        : kind == "filled" ? Theme.primary : kind == "tonal" ? Theme.secondary-container
+        : kind == "danger" ? Theme.error : transparent;
+    border-width: kind == "outlined" ? 1px : 0;
+    border-color: Theme.outline-variant;
+    opacity: enabled ? 1 : 0.6;
+    accessible-role: button;
+    accessible-label: text;
+    accessible-action-default => { if enabled && !busy { clicked(); } }
+    Rectangle {
+        border-radius: parent.border-radius;
+        background: touch.pressed ? fg.with-alpha(0.12) : touch.has-hover ? fg.with-alpha(0.08) : transparent;
+    }
+    HorizontalLayout {
+        padding-left: kind == "text" ? 12px : 24px;
+        padding-right: self.padding-left;
+        spacing: 8px;
+        alignment: center;
+        if busy: Spinner { width: 18px; height: 18px; indeterminate: true; }
+        if icon != "" && !busy: Icon { name: icon; size: 20px; color: enabled ? fg : Theme.on-surface; }
+        Text {
+            text: root.text;
+            color: enabled ? fg : Theme.on-surface;
+            font-size: Type.title * 0.94;
+            font-weight: 600;
+            vertical-alignment: center;
+        }
+    }
+    touch := TouchArea { enabled: root.enabled && !root.busy; clicked => { root.clicked(); } }
+}
+
+export component Chip inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <bool> selected;
+    callback clicked();
+    height: 36px;
+    border-radius: touch.pressed ? 10px : 18px;
+    animate border-radius, background { duration: Theme.fast; }
+    background: selected ? Theme.secondary-container : transparent;
+    border-width: selected ? 0 : 1px;
+    border-color: Theme.outline-variant;
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        spacing: 6px;
+        alignment: center;
+        if selected: Icon { name: "check"; size: 18px; color: Theme.on-secondary-container; }
+        if icon != "" && !selected: Icon { name: icon; size: 18px; color: Theme.on-surface-variant; }
+        Text {
+            text: root.text;
+            font-size: Type.label + 1px;
+            font-weight: 600;
+            color: selected ? Theme.on-secondary-container : Theme.on-surface-variant;
+            vertical-alignment: center;
+        }
+    }
+    touch := TouchArea { clicked => { root.clicked(); } }
+}
+
+// Avatar: a soft squircle in the person's colour, with their picture on top once it has loaded.
+export component Avatar inherits Rectangle {
+    in property <Author> author;
+    in property <length> size: 44px;
+    callback clicked();
+    width: size;
+    height: size;
+    border-radius: size * 0.36;
+    background: author.color;
+    clip: true;
+    Text {
+        text: author.letter;
+        color: author.on-color;
+        font-size: size * 0.42;
+        font-weight: 800;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    Image {
+        width: 100%;
+        height: 100%;
+        source: author.avatar;
+        image-fit: cover;
+    }
+    TouchArea { clicked => { root.clicked(); } }
+}
+
+export component Verified inherits Icon {
+    name: "verified";
+    filled: true;
+    size: 18px;
+    color: Theme.primary;
+}
+
+export component Divider inherits Rectangle {
+    height: 1px;
+    background: Theme.outline-variant;
+}
+
+// One action in a post's action row: icon + count.
+component PostAction inherits Rectangle {
+    in property <string> icon;
+    in property <int> count;
+    in property <bool> active;
+    in property <color> active-color: Theme.primary;
+    in property <string> label;
+    callback clicked();
+    height: 40px;
+    horizontal-stretch: 1;
+    accessible-role: button;
+    accessible-label: label;
+    accessible-checked: active;
+    accessible-action-default => { clicked(); }
+    HorizontalLayout {
+        alignment: start;
+        spacing: 4px;
+        Rectangle {
+            width: 40px;
+            height: 40px;
+            border-radius: touch.pressed ? 12px : 20px;
+            background: touch.pressed ? active-color.with-alpha(0.14) : transparent;
+            animate border-radius { duration: Theme.default; easing: cubic-bezier(0.34, 1.56, 0.64, 1); }
+            icon-glyph := Icon {
+                name: icon;
+                filled: active;
+                size: active ? 22px : 20px;
+                color: active ? active-color : Theme.on-surface-variant;
+                animate size { duration: Theme.default; easing: cubic-bezier(0.34, 1.8, 0.64, 1); }
+            }
+        }
+        Text {
+            text: count > 0 ? "\{count}" : "";
+            color: active ? active-color : Theme.on-surface-variant;
+            font-size: Type.label;
+            vertical-alignment: center;
+        }
+    }
+    touch := TouchArea { clicked => { root.clicked(); } }
+}
+
+export component PostCard inherits Rectangle {
+    in property <Post> post;
+    in property <bool> main;       // the large version at the top of a thread
+    in property <bool> first: true;
+    in property <bool> last: true;
+    callback open();
+    callback open-author();
+    callback reply();
+    callback like();
+    callback repost();
+    callback bookmark();
+    callback share();
+    callback more();
+    property <bool> cw-open;
+    property <bool> show-body: post.cw == "" || cw-open;
+    property <length> top-pad: post.context != "" ? 10px : 16px;
+    background: Theme.card;
+    border-top-left-radius: first ? 24px : 6px;
+    border-top-right-radius: self.border-top-left-radius;
+    border-bottom-left-radius: last ? 24px : 6px;
+    border-bottom-right-radius: self.border-bottom-left-radius;
+    clip: true;
+    TouchArea { clicked => { root.open(); } }
+    // Small cards keep the avatar in its own column; the text column is a plain vertical layout,
+    // which lets wrapped text measure itself against the real column width.
+    if !main: Avatar {
+        x: 16px;
+        y: top-pad + (post.context != "" ? 24px : 0px);
+        author: post.author;
+        size: 44px;
+        clicked => { root.open-author(); }
+    }
+    VerticalLayout {
+        padding-left: main ? 16px : 72px;
+        padding-right: 16px;
+        padding-top: top-pad;
+        padding-bottom: 6px;
+        spacing: 6px;
+        if post.context != "": HorizontalLayout {
+            spacing: 6px;
+            height: 18px;
+            alignment: start;
+            Icon { name: post.context-icon; size: 16px; color: Theme.on-surface-variant; }
+            Text { text: post.context; font-size: Type.small; font-weight: 600; color: Theme.on-surface-variant; overflow: elide; vertical-alignment: center; }
+        }
+        if main: HorizontalLayout {
+            spacing: 12px;
+            Avatar { author: post.author; size: 48px; clicked => { root.open-author(); } }
+            VerticalLayout {
+                alignment: center;
+                spacing: 2px;
+                HorizontalLayout {
+                    spacing: 4px;
+                    Text { text: post.author.name; font-weight: 700; font-size: Type.body; color: Theme.on-surface; overflow: elide; horizontal-stretch: 0; }
+                    if post.author.verified: Verified { size: 17px; }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+                Text { text: "@" + post.author.handle; color: Theme.on-surface-variant; font-size: Type.label + 1px; overflow: elide; }
+            }
+            IconButton { icon: "more_horiz"; size: 36px; icon-size: 20px; label: I18n.t("More options"); clicked => { root.more(); } }
+        }
+        if !main: HorizontalLayout {
+            spacing: 4px;
+            height: 24px;
+            Text { text: post.author.name; font-weight: 700; font-size: Type.body; color: Theme.on-surface; overflow: elide; horizontal-stretch: 0; vertical-alignment: center; }
+            if post.author.verified: Verified { size: 17px; }
+            Text {
+                text: "@" + post.author.handle + " · " + post.time;
+                color: Theme.on-surface-variant;
+                font-size: Type.label + 1px;
+                overflow: elide;
+                horizontal-stretch: 1;
+                vertical-alignment: center;
+            }
+            IconButton { icon: "more_horiz"; size: 28px; icon-size: 20px; label: I18n.t("More options"); clicked => { root.more(); } }
+        }
+        if post.cw != "": Rectangle {
+            border-radius: 14px;
+            background: Theme.tertiary-container;
+            VerticalLayout {
+                padding: 12px;
+                spacing: 4px;
+                HorizontalLayout {
+                    spacing: 6px;
+                    Icon { name: "info"; size: 18px; color: Theme.on-tertiary-container; }
+                    Text { text: I18n.t("Content warning"); font-size: Type.small; font-weight: 700; color: Theme.on-tertiary-container; vertical-alignment: center; horizontal-stretch: 1; }
+                    Text { text: cw-open ? I18n.t("Hide") : I18n.t("Show"); color: Theme.on-tertiary-container; font-weight: 700; }
+                }
+                Text { text: post.cw; color: Theme.on-tertiary-container; font-weight: 600; wrap: word-wrap; }
+            }
+            TouchArea { clicked => { cw-open = !cw-open; } }
+        }
+        if post.text != "" && show-body: Text {
+            text: post.text;
+            wrap: word-wrap;
+            font-size: main ? Type.title + 3px : Type.body;
+            color: Theme.on-surface;
+        }
+        if post.image-url != "" && show-body: Rectangle {
+            height: min(self.width / max(post.image-ratio, 0.6), 420px);
+            border-radius: 18px;
+            clip: true;
+            background: Theme.surface-high;
+            Image { width: 100%; height: 100%; source: post.image; image-fit: cover; }
+            if post.is-video: Rectangle {
+                width: 64px;
+                height: 64px;
+                border-radius: 32px;
+                background: #000000a0;
+                Text { text: "▶"; color: white; font-size: 28px; }
+            }
+            if post.image-count > 1: Rectangle {
+                x: parent.width - self.width - 8px;
+                y: 8px;
+                width: 44px;
+                height: 24px;
+                border-radius: 12px;
+                background: #000000a0;
+                Text { text: "1/\{post.image-count}"; color: white; font-size: Type.small; font-weight: 700; }
+            }
+        }
+        if post.quote-author != "": Rectangle {
+            border-radius: 16px;
+            border-width: 1px;
+            border-color: Theme.outline-variant;
+            VerticalLayout {
+                padding: 12px;
+                spacing: 4px;
+                Text { text: post.quote-author; font-weight: 700; font-size: Type.label + 1px; color: Theme.on-surface; overflow: elide; }
+                if post.quote-text != "": Text { text: post.quote-text; wrap: word-wrap; color: Theme.on-surface; font-size: Type.label + 1px; }
+            }
+        }
+        if main: HorizontalLayout {
+            spacing: 6px;
+            padding-top: 4px;
+            height: 26px;
+            Text { text: post.full-time; color: Theme.on-surface-variant; font-size: Type.label + 1px; vertical-alignment: center; horizontal-stretch: 0; }
+            if post.client != "": Text { text: "·"; color: Theme.on-surface-variant; vertical-alignment: center; horizontal-stretch: 0; }
+            if post.client != "": Icon { name: post.client-icon; size: 16px; color: Theme.on-surface-variant; }
+            if post.client != "": Text { text: post.client; color: Theme.on-surface-variant; font-size: Type.label + 1px; vertical-alignment: center; overflow: elide; horizontal-stretch: 0; }
+            if post.edited: Text { text: "· " + I18n.t("Edited"); color: Theme.on-surface-variant; font-size: Type.label + 1px; vertical-alignment: center; horizontal-stretch: 0; }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        if main && post.likes + post.reposts + post.views > 0: HorizontalLayout {
+            spacing: 16px;
+            height: 22px;
+            if post.views > 0: Text { text: "\{post.views} " + (post.views == 1 ? I18n.t("View|stat") : I18n.t("Views")); color: Theme.on-surface-variant; font-size: Type.label + 1px; }
+            if post.reposts > 0: Text { text: "\{post.reposts} " + (post.reposts == 1 ? I18n.t("Repost|stat") : I18n.t("Reposts")); color: Theme.on-surface-variant; font-size: Type.label + 1px; }
+            if post.likes > 0: Text { text: "\{post.likes} " + (post.likes == 1 ? I18n.t("Like|stat") : I18n.t("Likes")); color: Theme.on-surface-variant; font-size: Type.label + 1px; }
+            Rectangle { horizontal-stretch: 1; }
+        }
+        if main: Divider { }
+        HorizontalLayout {
+            height: 40px;
+            PostAction { icon: "chat_bubble"; count: post.replies; label: I18n.t("Reply"); clicked => { root.reply(); } }
+            PostAction { icon: "repeat"; count: post.reposts; active: post.reposted; active-color: Theme.repost; label: I18n.t("Repost"); clicked => { root.repost(); } }
+            PostAction { icon: "favorite"; count: post.likes; active: post.liked; active-color: Theme.like; label: I18n.t("Like"); clicked => { root.like(); } }
+            PostAction { icon: "bookmark"; count: 0; active: post.bookmarked; label: I18n.t("Bookmark"); clicked => { root.bookmark(); } }
+            PostAction { icon: "share"; count: 0; label: I18n.t("Share"); horizontal-stretch: 0; width: 40px; clicked => { root.share(); } }
+        }
+    }
+}
+
+// Top app bar: optional back arrow, a title and trailing actions.
+export component TopBar inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+    in property <bool> back;
+    in property <bool> large;
+    in property <length> inset;
+    callback go-back();
+    background: Theme.surface;
+    height: inset + (large ? 72px : 64px);
+    @children
+    HorizontalLayout {
+        y: inset;
+        height: parent.height - inset;
+        padding-left: back ? 4px : 20px;
+        padding-right: 8px;
+        spacing: 4px;
+        if back: IconButton { icon: "arrow_back"; tint: Theme.on-surface; label: I18n.t("Back"); y: (parent.height - self.height) / 2; clicked => { root.go-back(); } }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 1;
+            Text { text: title; font-size: large ? Type.headline : Type.title-large; font-weight: 800; color: Theme.on-surface; overflow: elide; }
+            if subtitle != "": Text { text: subtitle; font-size: Type.label; color: Theme.on-surface-variant; overflow: elide; }
+        }
+    }
+}
+
+export component NavItem inherits Rectangle {
+    in property <string> icon;
+    in property <string> text;
+    in property <bool> active;
+    in property <int> badge;
+    callback clicked();
+    horizontal-stretch: 1;
+    accessible-role: tab;
+    accessible-label: text;
+    accessible-action-default => { clicked(); }
+    VerticalLayout {
+        alignment: center;
+        spacing: 4px;
+        HorizontalLayout {
+            alignment: center;
+            pill := Rectangle {
+                width: active ? 64px : 36px;
+                height: 32px;
+                border-radius: 16px;
+                background: active ? Theme.secondary-container : touch.pressed ? Theme.on-surface.with-alpha(0.10) : transparent;
+                animate width { duration: Theme.default; easing: cubic-bezier(0.34, 1.56, 0.64, 1); }
+                animate background { duration: Theme.fast; }
+                Icon { name: icon; filled: active; color: active ? Theme.on-secondary-container : Theme.on-surface-variant; }
+                if badge > 0: Rectangle {
+                    x: parent.width / 2 + 4px;
+                    y: 0;
+                    width: max(16px, badge-text.preferred-width + 8px);
+                    height: 16px;
+                    border-radius: 8px;
+                    background: Theme.error;
+                    badge-text := Text { text: badge > 99 ? "99+" : "\{badge}"; color: Theme.surface; font-size: 10px; font-weight: 800; }
+                }
+            }
+        }
+        Text {
+            text: root.text;
+            horizontal-alignment: center;
+            font-size: Type.small;
+            font-weight: active ? 800 : 500;
+            color: active ? Theme.on-surface : Theme.on-surface-variant;
+            overflow: elide;
+        }
+    }
+    touch := TouchArea { clicked => { root.clicked(); } }
+}
+
+export component EmptyState inherits VerticalLayout {
+    in property <string> icon;
+    in property <string> title;
+    in property <string> body;
+    padding: 40px;
+    spacing: 12px;
+    alignment: center;
+    HorizontalLayout {
+        alignment: center;
+        Rectangle {
+            width: 96px;
+            height: 96px;
+            border-radius: 34px;
+            background: Theme.primary-container;
+            Icon { name: icon; size: 44px; color: Theme.on-primary-container; }
+        }
+    }
+    Text { text: title; font-size: Type.title-large; font-weight: 800; horizontal-alignment: center; wrap: word-wrap; color: Theme.on-surface; }
+    if body != "": Text { text: body; horizontal-alignment: center; wrap: word-wrap; color: Theme.on-surface-variant; }
+}
+
+export component Loading inherits HorizontalLayout {
+    alignment: center;
+    padding: 24px;
+    Spinner { width: 36px; height: 36px; indeterminate: true; }
+}
+
+// The 3itter logo.
+export component BrandMark inherits Image {
+    in property <length> size: 40px;
+    width: size;
+    height: size;
+    source: @image-url("logo.png");
+    image-fit: contain;
+}

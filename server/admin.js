@@ -161,10 +161,11 @@ route('POST', '/api/admin/reports/:id/resolve', ({ me, params, body }) => {
       audit(me.id, 'user.suspend', `@${target.handle}`, `report #${r.id}`);
     }
     // Resolving one report resolves duplicates about the same post (or same account when suspended).
-    const scope = action.includes('suspend') ? 'target_id = :t' : 'target_id = :t AND post_id IS :p';
+    // (node:sqlite rejects unused named parameters, so :p is only passed when the SQL uses it.)
+    const bySuspension = action.includes('suspend');
     run(`UPDATE reports SET status = 'resolved', resolution = :a, resolved_by = :me, resolved_at = :now
-         WHERE status = 'open' AND (id = :id OR (${scope}))`,
-    { a: action, me: me.id, now: Date.now(), id: r.id, t: r.target_id, p: r.post_id });
+         WHERE status = 'open' AND (id = :id OR (${bySuspension ? 'target_id = :t' : 'target_id = :t AND post_id IS :p'}))`,
+    { a: action, me: me.id, now: Date.now(), id: r.id, t: r.target_id, ...(bySuspension ? {} : { p: r.post_id }) });
   });
   if (action === 'dismiss') audit(me.id, 'report.dismiss', `#${r.id}`);
   return { ok: true };

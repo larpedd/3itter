@@ -12,10 +12,11 @@ import crypto from 'node:crypto';
 import { all, get, run, tx, getSetting, setSetting } from './db.js';
 import {
   DOMAIN, PUBLIC_URL, VERSION, SHAPES, cleanFlags, MAX_POST_LEN, MAX_MSG_LEN, MAX_IMAGE_BYTES, instance, absUrl, saveImageBuffer,
-  notify, notifyMentions, softDeletePost, localUserByHandle, isBlockedBetween, audit,
-  postImages, pollCounts, MAX_IMAGES, REPLY_POLICIES,
+  notify, notifyMentions, publishMessage, softDeletePost, localUserByHandle, isBlockedBetween, audit,
+  postImages, postVideo, pollCounts, MAX_IMAGES, REPLY_POLICIES,
 } from './core.js';
 import { HttpError, fail } from './http.js';
+import { CLIENTS } from './locale.js';
 
 export const PROTOCOL = 1;
 const MAX_SKEW_MS = 5 * 60_000;
@@ -174,6 +175,8 @@ export function postObject(postId) {
     author: userObject(get('SELECT * FROM users WHERE id = :id', { id: p.author_id })),
     text: p.text, image: images[0]?.src || null, images,
     sensitive: !!p.sensitive, cw: p.cw || '', editedAt: p.edited_at || null, replyPolicy: p.reply_policy || 'everyone',
+    client: p.client || null,
+    video: (() => { const v = postVideo(p); return v ? { src: absUrl(v.src), poster: v.poster ? absUrl(v.poster) : null, alt: v.alt } : null; })(),
     poll: pollRow ? { options: JSON.parse(pollRow.options), multiple: !!pollRow.multiple, endsAt: pollRow.ends_at, ...pollCounts(p.id) } : null,
     replyTo: uriOf(p.reply_to), quoteOf: uriOf(p.quote_of),
     createdAt: p.created_at,
@@ -200,14 +203,27 @@ export function resolveUri(uri) {
   return get('SELECT id FROM posts WHERE remote_uri = :u', { u: uri })?.id ?? null;
 }
 
+// Remote pictures are copied once: the same source URL maps to the same local file, and parallel
+// requests for one URL share a single download.
+const imageCache = new Map();   // remote src -> local path (or null when it failed)
+const imageInflight = new Map();
 async function cacheRemoteImage(src, peer) {
   if (typeof src !== 'string' || !src.startsWith(`${peer.base_url}/uploads/`)) return null;
-  try {
-    const res = await fetch(src, { signal: AbortSignal.timeout(10_000), redirect: 'error' });
-    if (!res.ok) return null;
-    const buf = await readLimited(res, MAX_IMAGE_BYTES);
-    return saveImageBuffer(buf, String(res.headers.get('content-type') || '').split(';')[0]);
-  } catch { return null; }
+  if (imageCache.has(src)) return imageCache.get(src);
+  if (imageInflight.has(src)) return imageInflight.get(src);
+  const job = (async () => {
+    try {
+      const res = await fetch(src, { signal: AbortSignal.timeout(8_000), redirect: 'error' });
+      if (!res.ok) return null;
+      const buf = await readLimited(res, MAX_IMAGE_BYTES);
+      return saveImageBuffer(buf, String(res.headers.get('content-type') || '').split(';')[0]);
+    } catch { return null; }
+  })();
+  imageInflight.set(src, job);
+  const local = await job;
+  imageInflight.delete(src);
+  if (local) { imageCache.set(src, local); if (imageCache.size > 5000) imageCache.delete(imageCache.keys().next().value); }
+  return local;
 }
 
 export async function upsertRemoteUser(obj, peer) {
@@ -261,7 +277,13 @@ export async function upsertRemotePost(obj, peer) {
     if (local) images.push({ src: local, alt: s(img.alt, 1000) });
   }
   const image = images[0]?.src ?? null;
-  if (!text && !image) return null;
+  // Videos stay on their home instance (only the poster frame is copied).
+  let video = null;
+  if (!image && obj.video && typeof obj.video.src === 'string' && obj.video.src.startsWith(`${peer.base_url}/uploads/`)
+      && /\.(mp4|webm|mov)$/i.test(obj.video.src)) {
+    video = { src: obj.video.src, poster: await cacheRemoteImage(obj.video.poster, peer), alt: s(obj.video.alt, 1000) };
+  }
+  if (!text && !image && !video) return null;
   const poll = cleanPoll(obj.poll);
   const replyTo = resolveUri(obj.replyTo);
   const quoteOf = resolveUri(obj.quoteOf);
@@ -269,13 +291,14 @@ export async function upsertRemotePost(obj, peer) {
   return tx(() => {
     const again = get('SELECT id FROM posts WHERE remote_uri = :u', { u: obj.uri });
     if (again) return again.id;
-    const r = run(`INSERT INTO posts (author_id, text, image, images, sensitive, cw, reply_policy, edited_at, reply_to, quote_of, created_at,
-                     remote_uri, fed_likes, fed_reposts, fed_replies)
-                   VALUES (:a, :text, :image, :images, :sensitive, :cw, :policy, :edited, :reply, :quote, :t, :uri, :likes, :reposts, :replies)`,
-    { a: author.id, text, image, images: images.length ? JSON.stringify(images) : null, sensitive: obj.sensitive && image ? 1 : 0,
+    const r = run(`INSERT INTO posts (author_id, text, image, images, video, sensitive, cw, reply_policy, edited_at, reply_to, quote_of, created_at,
+                     remote_uri, fed_likes, fed_reposts, fed_replies, client)
+                   VALUES (:a, :text, :image, :images, :video, :sensitive, :cw, :policy, :edited, :reply, :quote, :t, :uri, :likes, :reposts, :replies, :client)`,
+    { a: author.id, text, image, images: images.length ? JSON.stringify(images) : null, video: video ? JSON.stringify(video) : null,
+      sensitive: obj.sensitive && (image || video) ? 1 : 0,
       cw: s(obj.cw, 100), policy: REPLY_POLICIES.includes(obj.replyPolicy) ? obj.replyPolicy : 'everyone',
       edited: Number.isInteger(obj.editedAt) ? obj.editedAt : null,
-      reply: replyTo, quote: quoteOf, t: created, uri: obj.uri, ...counts });
+      reply: replyTo, quote: quoteOf, t: created, uri: obj.uri, ...counts, client: CLIENTS.includes(obj.client) ? obj.client : null });
     const pid = Number(r.lastInsertRowid);
     if (poll) run('INSERT INTO polls (post_id, options, multiple, ends_at, fed_counts) VALUES (:p, :o, :m, :e, :f)',
       { p: pid, o: JSON.stringify(poll.options), m: poll.multiple ? 1 : 0, e: poll.endsAt, f: JSON.stringify({ counts: poll.counts, voters: poll.voters }) });
@@ -411,6 +434,7 @@ const HANDLERS = {
     if (to.dm_policy === 'following' && !get('SELECT 1 AS x FROM follows WHERE follower_id = :a AND followee_id = :b', { a: to.id, b: actor.id })) return;
     run('INSERT INTO messages (sender_id, recipient_id, text, created_at) VALUES (:a, :b, :text, :t)',
       { a: actor.id, b: to.id, text, t: Date.now() });
+    publishMessage(to.id, actor.id, text);
   },
 };
 
@@ -679,21 +703,39 @@ function flushCounts() {
 
 // ---------------------------------------------------------------- remote lookups
 
-export async function fetchRemoteUser(handle, domain) {
+const userFetches = new Map();
+export function fetchRemoteUser(handle, domain) {
+  const key = `${handle}@${domain}`.toLowerCase();
+  if (!userFetches.has(key)) userFetches.set(key, fetchRemoteUserNow(handle, domain).finally(() => userFetches.delete(key)));
+  return userFetches.get(key);
+}
+
+async function fetchRemoteUserNow(handle, domain) {
   const peer = get(`SELECT * FROM peers WHERE domain = :d AND status = 'active'`, { d: domain.toLowerCase() });
   if (!peer) fail(404, `${domain} isn’t federated with this instance.`);
   const data = await fedFetch(peer.base_url, 'GET', `/fed/users/${encodeURIComponent(handle)}`).catch((e) => fail(502, `Couldn’t load @${handle}@${domain}: ${e.message}`));
   const u = await upsertRemoteUser(data.user, peer);
-  for (const p of (Array.isArray(data.posts) ? data.posts : []).slice(0, 20).reverse()) {
-    try { await upsertRemotePost(p, peer); } catch { /* skip bad post */ }
+  // Posts are stored a few at a time (their pictures download in parallel), oldest first.
+  const posts = (Array.isArray(data.posts) ? data.posts : []).slice(0, 20).reverse();
+  for (let i = 0; i < posts.length; i += 4) {
+    await Promise.all(posts.slice(i, i + 4).map((p) => upsertRemotePost(p, peer).catch(() => null)));
   }
   run('UPDATE users SET fetched_at = :t WHERE id = :id', { t: Date.now(), id: u.id });
   return get('SELECT * FROM users WHERE id = :id', { id: u.id });
 }
 
+// Cached remote profiles are served straight away and refreshed in the background, so a slow or
+// unreachable peer never holds up page loads. One refresh per account at a time.
+const refreshing = new Map();
+export function refreshInBackground(u) {
+  if (!u?.domain || refreshing.has(u.id)) return;
+  const job = fetchRemoteUser(u.handle.split('@')[0], u.domain).catch(() => null).finally(() => refreshing.delete(u.id));
+  refreshing.set(u.id, job);
+}
 export async function refreshIfStale(u) {
-  if (!u?.domain || Date.now() - (u.fetched_at || 0) < 120_000) return u;
-  try { return await fetchRemoteUser(u.handle.split('@')[0], u.domain); } catch { return u; }
+  if (!u?.domain || Date.now() - (u.fetched_at || 0) < 10 * 60_000) return u;
+  refreshInBackground(u);
+  return u;
 }
 
 // ---------------------------------------------------------------- admin operations

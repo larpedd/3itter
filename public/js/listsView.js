@@ -1,4 +1,5 @@
 // Lists (curated timelines), the "add to lists" picker, and scheduled posts.
+import { locale } from './lib/i18n.js';
 import { html, el } from './lib/html.js';
 import { api } from './lib/api.js';
 import { state, emit } from './store.js';
@@ -163,7 +164,7 @@ export async function openListPicker(user) {
 
 // ---------------------------------------------------------------- scheduled posts
 
-const when = (t) => new Date(t).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+const when = (t) => new Date(t).toLocaleString(locale(), { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
 export async function scheduledView() {
   const { scheduled } = await api('/scheduled');

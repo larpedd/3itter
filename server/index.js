@@ -13,11 +13,32 @@ import './api.js';
 import './admin.js';
 import './passkeys.js';
 import { startScheduler, countAnonymousView } from './extras.js';
+import { receiveVideo, cleanUnusedMedia } from './media.js';
+import { openStream } from './realtime.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
+// Raw video upload: the body is the file itself, so it skips the JSON parser.
+async function handleVideoUpload(req, res) {
+  const origin = req.headers.origin;
+  if (origin) {
+    let host;
+    try { host = new URL(origin).host; } catch { fail(403, 'Bad origin.'); }
+    if (host !== req.headers.host) fail(403, 'Cross-origin request blocked.');
+  }
+  const me = currentSession(req)?.user;
+  if (!me) fail(401, 'Please sign in.');
+  json(res, 200, await receiveVideo(req, me));
+}
+
 async function handleApi(req, res, url) {
+  if (url.pathname === '/api/media/video' && req.method === 'POST') return handleVideoUpload(req, res);
+  if (url.pathname === '/api/stream' && req.method === 'GET') {
+    const me = currentSession(req)?.user;
+    if (!me) fail(401, 'Please sign in.');
+    return openStream(req, res, me.id);
+  }
   const match = routes.map((r) => ({ r, m: r.method === req.method && r.re.exec(url.pathname) })).find((x) => x.m);
   if (!match) {
     const exists = routes.some((r) => r.re.test(url.pathname));
@@ -96,10 +117,11 @@ ${items}
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp',
+  '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime',
   '.ico': 'image/x-icon', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.txt': 'text/plain; charset=utf-8',
 };
 
-function serveFile(res, root, rel, fallbackIndex, pathname = '/') {
+function serveFile(res, root, rel, fallbackIndex, pathname = '/', req = null) {
   const file = path.normalize(path.join(root, rel));
   if (!file.startsWith(root + path.sep)) return send(res, 403, 'Forbidden');
   fs.stat(file, (err, st) => {
@@ -107,17 +129,39 @@ function serveFile(res, root, rel, fallbackIndex, pathname = '/') {
       if (fallbackIndex) return sendIndex(res, pathname);
       return send(res, 404, 'Not found', { 'Content-Type': 'text/plain' });
     }
-    res.writeHead(200, {
+    const headers = {
       ...SECURITY_HEADERS,
       'Content-Type': MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
-      'Content-Length': st.size,
       'Cache-Control': root === UPLOAD_DIR ? 'public, max-age=31536000, immutable' : 'no-cache',
-    });
+      'Accept-Ranges': 'bytes',
+    };
+    // Byte ranges, so videos can seek and stream.
+    const range = /^bytes=(\d*)-(\d*)$/.exec(String(req?.headers.range || ''));
+    if (range && (range[1] || range[2])) {
+      let start = range[1] ? Number(range[1]) : Math.max(0, st.size - Number(range[2]));
+      let end = range[1] && range[2] ? Math.min(Number(range[2]), st.size - 1) : st.size - 1;
+      if (start >= st.size || start > end) {
+        res.writeHead(416, { ...headers, 'Content-Range': `bytes */${st.size}` });
+        return res.end();
+      }
+      res.writeHead(206, { ...headers, 'Content-Range': `bytes ${start}-${end}/${st.size}`, 'Content-Length': end - start + 1 });
+      if (req.method === 'HEAD') return res.end();
+      return fs.createReadStream(file, { start, end }).pipe(res);
+    }
+    res.writeHead(200, { ...headers, 'Content-Length': st.size });
+    if (req?.method === 'HEAD') return res.end();
     fs.createReadStream(file).pipe(res);
   });
 }
 
+const SLOW_MS = Number(process.env.SLOW_REQUEST_MS || 1500);
 const server = http.createServer(async (req, res) => {
+  // Log slow requests, so problems (e.g. a sluggish federated peer) show up in the journal.
+  const started = Date.now();
+  res.on('finish', () => {
+    const ms = Date.now() - started;
+    if (ms > SLOW_MS && !req.url.startsWith('/api/media/')) console.warn(`slow request: ${req.method} ${req.url.split('?')[0]} ${res.statusCode} ${ms}ms`);
+  });
   let url;
   try { url = new URL(req.url, 'http://localhost'); } catch { return send(res, 400, 'Bad request'); }
   try {
@@ -132,7 +176,7 @@ const server = http.createServer(async (req, res) => {
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method not allowed');
     let pathname;
     try { pathname = decodeURIComponent(url.pathname); } catch { return send(res, 400, 'Bad request'); }
-    if (pathname.startsWith('/uploads/')) return serveFile(res, UPLOAD_DIR, pathname.slice('/uploads/'.length), false);
+    if (pathname.startsWith('/uploads/')) return serveFile(res, UPLOAD_DIR, pathname.slice('/uploads/'.length), false, pathname, req);
     const rss = /^\/u\/([A-Za-z0-9_]{1,15})\/rss\.xml$/.exec(pathname);
     if (rss) return rssFeed(res, rss[1]);
     if (pathname === '/' || pathname === '/index.html') return sendIndex(res, '/');
@@ -160,4 +204,5 @@ if (!get(`SELECT 1 AS x FROM users WHERE role = 'admin' AND domain IS NULL AND d
 startFederationWorkers();
 startScheduler();
 setInterval(() => run('DELETE FROM sessions WHERE expires_at < :now', { now: Date.now() }), 3600_000).unref();
+setInterval(cleanUnusedMedia, 3600_000).unref();
 server.listen(PORT, HOST, () => console.log(`3itter (${DOMAIN}) running on ${PUBLIC_URL}  [listening on ${HOST}:${PORT}]`));

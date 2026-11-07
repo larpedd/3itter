@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { get, UPLOAD_DIR } from './db.js';
 import { PUBLIC_URL, instance, loadPosts, absUrl, publicUser } from './core.js';
 import { json, send, SECURITY_HEADERS } from './http.js';
+import { clientName } from './locale.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
 const SITE_ICON = `${PUBLIC_URL}/icon-512.png`;
@@ -111,7 +112,11 @@ function postParts(p) {
   return parts;
 }
 
-const mediaOf = (p) => (p.cw || p.sensitive ? [] : (p.images || []).map((im) => ({ ...im, abs: absUrl(im.src), size: imageSize(im.src) })));
+const mediaOf = (p) => (p.cw || p.sensitive ? [] : p.video?.poster
+  ? [{ src: p.video.poster, alt: p.video.alt, abs: absUrl(p.video.poster), size: imageSize(p.video.poster) }]
+  : (p.images || []).map((im) => ({ ...im, abs: absUrl(im.src), size: imageSize(im.src) })));
+const VIDEO_MIME = { mp4: 'video/mp4', webm: 'video/webm', mov: 'video/quicktime' };
+const videoType = (src) => VIDEO_MIME[String(src).split('.').pop().toLowerCase()] || 'video/mp4';
 
 // ---------------------------------------------------------------- HTML meta
 
@@ -157,6 +162,13 @@ function postMeta(p) {
       m.size && ['property', 'og:image:height', String(m.size.h)],
       m.alt && ['property', 'og:image:alt', clip(m.alt, 400)],
     ]) : [['property', 'og:image', avatar], ['property', 'og:image:alt', `${a.name}’s avatar`]]),
+    ...(p.video && !p.cw && !p.sensitive ? [
+      ['property', 'og:video', absUrl(p.video.src)],
+      ['property', 'og:video:secure_url', absUrl(p.video.src)],
+      ['property', 'og:video:type', videoType(p.video.src)],
+      media[0]?.size && ['property', 'og:video:width', String(media[0].size.w)],
+      media[0]?.size && ['property', 'og:video:height', String(media[0].size.h)],
+    ] : []),
     ['name', 'twitter:card', media.length ? 'summary_large_image' : 'summary'],
     ['name', 'twitter:title', titleText],
     ['name', 'twitter:description', description],
@@ -274,7 +286,11 @@ function mastoAccount(a) {
 function mastoStatus(p) {
   const stats = statsLine(p.counts);
   const content = [...postParts(p), stats].filter(Boolean).map((part) => `<p>${htmlText(part)}</p>`).join('');
-  const media = (p.cw ? [] : p.images || []).map((im, i) => {
+  const video = p.video && !p.cw ? [{
+    id: `${p.id}v`, type: 'video', url: absUrl(p.video.src), preview_url: absUrl(p.video.poster || p.video.src), remote_url: null,
+    description: p.video.alt || null, blurhash: null, meta: {},
+  }] : [];
+  const media = video.length ? video : (p.cw ? [] : p.images || []).map((im, i) => {
     const size = imageSize(im.src);
     const meta = size ? { width: size.w, height: size.h, size: `${size.w}x${size.h}`, aspect: size.w / size.h } : undefined;
     return {
@@ -288,7 +304,7 @@ function mastoStatus(p) {
     sensitive: !!(p.sensitive || p.cw), spoiler_text: '', visibility: 'public', language: 'en',
     uri: `${PUBLIC_URL}/users/${encodeURIComponent(p.author.handle)}/statuses/${p.id}`, url: `${PUBLIC_URL}/p/${p.id}`,
     replies_count: p.counts.replies, reblogs_count: p.counts.reposts, favourites_count: p.counts.likes,
-    content, reblog: null, application: { name: instance().name, website: PUBLIC_URL },
+    content, reblog: null, application: { name: clientName(p.client) || instance().name, website: PUBLIC_URL },
     account: mastoAccount(p.author), media_attachments: media, mentions: [], tags: [], emojis: [], card: null,
     poll: p.poll && !p.cw ? {
       id: String(p.id), expires_at: iso(p.poll.endsAt), expired: p.poll.closed, multiple: p.poll.multiple,

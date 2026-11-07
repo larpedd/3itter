@@ -1,21 +1,24 @@
 // Settings: index plus Account, Privacy & safety, Notifications, Appearance, Federation and About pages.
+import { t, locale, storeLanguage, languageName, LANGUAGES } from './lib/i18n.js';
 import { html, el } from './lib/html.js';
 import { api } from './lib/api.js';
 import { SHAPES } from './lib/shapes.js';
 import { getTheme, setTheme } from './lib/theme.js';
 import { state, emit } from './store.js';
 import {
-  icon, avatar, nameOf, topBar, loader, toast, confirmDialog, openDialog, relTime, compact, wavyProgress, emptyState,
-  openMenu,
+  icon, avatar, nameOf, topBar, loader, toast, confirmDialog, openDialog, relTime, fullTime, compact, wavyProgress, emptyState,
+  openMenu, clientLabel,
 } from './ui.js';
 import { openEditProfile } from './dialogs.js';
 import { passkeysSupported, registerPasskey } from './lib/webauthn.js';
 
 const SECTIONS = [
-  ['account', 'manage_accounts', 'Your account', 'Password, sessions, download or delete your data'],
+  ['account', 'manage_accounts', 'Your account', 'Profile, password, passkeys, download or delete your data'],
+  ['sessions', 'devices', 'Devices & sessions', 'See where you’re signed in and sign out remotely'],
   ['privacy', 'shield_lock', 'Privacy & safety', 'Messages, discoverability, blocked and muted accounts'],
   ['notifications', 'notifications', 'Notifications', 'Choose what you get notified about'],
   ['appearance', 'palette', 'Appearance', 'Theme, colour, text size and motion'],
+  ['language', 'translate', 'Language', null],
   ['federation', 'hub', 'Federation', 'Your federated address and connected instances'],
   ['about', 'info', 'About this instance', 'Rules, terms, privacy and version'],
 ];
@@ -43,7 +46,7 @@ function indexPage() {
       </a>
       <nav class="seg settings-nav">
         ${SECTIONS.map(([k, ic, t, d]) => html`<a class="list-item" href="/settings/${k}">
-          <span class="li-icon">${icon(ic)}</span><div class="li-text"><div class="li-head">${t}</div><div class="li-sub">${d}</div></div>${icon('chevron_right')}</a>`)}
+          <span class="li-icon">${icon(ic)}</span><div class="li-text"><div class="li-head">${t}</div><div class="li-sub">${d ?? languageSummary()}</div></div>${icon('chevron_right')}</a>`)}
       </nav>
       ${staff ? html`<nav class="seg settings-nav"><a class="list-item" href="/admin">
           <span class="li-icon staff">${icon('shield_person')}</span><div class="li-text"><div class="li-head">Admin panel</div>
@@ -69,7 +72,7 @@ function accountPage() {
       <h2 class="title-large emph">Profile</h2>
       <div class="setting">
         <div class="account-line">${avatar(me, 'md', { link: false })}<div><div class="title-medium">${nameOf(me)}</div>
-          <div class="setting-sub">@${me.handle} · joined ${new Date(me.createdAt).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })}</div></div></div>
+          <div class="setting-sub">@${me.handle} · joined ${new Date(me.createdAt).toLocaleDateString(locale(), { month: 'long', year: 'numeric' })}</div></div></div>
         <button class="btn tonal" type="button" data-action="edit-profile">${icon('edit', 'sm')}Edit</button>
       </div>
     </section>
@@ -96,11 +99,11 @@ function accountPage() {
     : html`<p class="setting-sub">${icon('info', 'xs')} This browser doesn’t support passkeys.</p>`}
     </section>
 
-    <section class="card">
-      <div class="setting"><h2 class="title-large emph">Where you’re signed in</h2>
-        <button class="btn text" type="button" data-revoke-all>Sign out others</button></div>
-      <div class="sessions seg tight">${loader('sm')}</div>
-    </section>
+    <a class="card settings-link" href="/settings/sessions">
+      <span class="li-icon">${icon('devices')}</span>
+      <div><div class="title-medium">Devices & sessions</div><div class="setting-sub">See where you’re signed in and sign out remotely</div></div>
+      ${icon('chevron_right')}
+    </a>
 
     <section class="card">
       <h2 class="title-large emph">Your data</h2>
@@ -154,40 +157,17 @@ function accountPage() {
     ]);
   });
 
-  const sessions = root.querySelector('.sessions');
-  const loadSessions = async () => {
-    try {
-      const { sessions: list } = await api('/me/sessions');
-      sessions.innerHTML = String(html`${list.map((s) => { const d = device(s.userAgent); return html`
-        <div class="list-item session">
-          <span class="li-icon">${icon(d.mobile ? 'smartphone' : 'computer')}</span>
-          <div class="li-text"><div class="li-head">${d.label}${s.current ? html` <span class="tag current">This device</span>` : ''}</div>
-            <div class="li-sub">${s.ip || 'Unknown IP'} · active ${relTime(s.lastUsed || s.createdAt)} · signed in ${new Date(s.createdAt).toLocaleDateString()}</div></div>
-          ${s.current ? '' : html`<button class="icon-btn" type="button" data-revoke="${s.id}" aria-label="Sign out this session">${icon('logout')}</button>`}
-        </div>`; })}`);
-    } catch (e) { sessions.textContent = e.message; }
-  };
-  loadSessions();
-
   root.querySelector('.pw-form').addEventListener('submit', async (e) => {
     e.preventDefault();
     const f = e.target;
     if (f.next.value !== f.confirm.value) return toast('The new passwords don’t match.');
     try {
       await api('/me/password', { method: 'POST', body: { current: f.current.value, next: f.next.value } });
-      f.reset(); toast('Password updated. Other sessions were signed out.'); loadSessions();
+      f.reset(); toast('Password updated. Other sessions were signed out.');
     } catch (err) { toast(err.message); }
   });
 
   root.addEventListener('click', async (e) => {
-    const revoke = e.target.closest('[data-revoke]');
-    if (revoke) {
-      try { await api(`/me/sessions/${revoke.dataset.revoke}`, { method: 'DELETE' }); toast('Session signed out'); loadSessions(); } catch (err) { toast(err.message); }
-    }
-    if (e.target.closest('[data-revoke-all]')) {
-      if (!await confirmDialog({ title: 'Sign out other sessions?', body: 'Every device except this one will be signed out.', confirm: 'Sign out others' })) return;
-      try { const r = await api('/me/sessions', { method: 'DELETE' }); toast(`${r.revoked} session${r.revoked === 1 ? '' : 's'} signed out`); loadSessions(); } catch (err) { toast(err.message); }
-    }
     if (e.target.closest('[data-export]')) {
       try {
         const res = await fetch('/api/me/export', { credentials: 'same-origin' });
@@ -256,6 +236,10 @@ function privacyPage() {
       <div class="setting">
         <div><div class="title-medium">Show me in suggestions and search</div><div class="setting-sub">People can still find you by your exact handle</div></div>
         ${sw('discoverable', s.discoverable, 'Show me in suggestions and search')}
+      </div>
+      <div class="setting">
+        <div><div class="title-medium">Show which device I post from</div><div class="setting-sub">Adds “3itter for Android”, “3itter for iPhone” and so on under your new posts</div></div>
+        ${sw('showClient', s.showClient, 'Show which device I post from')}
       </div>
     </section>
     <section class="card">
@@ -327,6 +311,9 @@ function privacyPage() {
         emit('relationships:changed');
       } catch (err) { toast(err.message); }
     }
+  });
+  root.querySelector('[data-key=showClient]').addEventListener('change', async (e) => {
+    try { await saveMe({ showClient: e.target.checked }); } catch (err) { toast(err.message); e.target.checked = !e.target.checked; }
   });
   root.querySelector('[data-key=discoverable]').addEventListener('change', async (e) => {
     try { await saveMe({ discoverable: e.target.checked }); } catch (err) { toast(err.message); e.target.checked = !e.target.checked; }
@@ -535,10 +522,125 @@ async function aboutPage() {
   return { el: root, title: 'About' };
 }
 
+// ---------------------------------------------------------------- sessions
+
+const BROWSERS = [[/Edg\//, 'Edge'], [/OPR\/|Opera/, 'Opera'], [/SamsungBrowser/, 'Samsung Internet'], [/Firefox\//, 'Firefox'],
+  [/Chrome\//, 'Chrome'], [/Safari\//, 'Safari'], [/curl/i, 'curl']];
+const SYSTEMS = [[/Windows/, 'Windows'], [/Android/, 'Android'], [/iPhone|iPod/, 'iPhone'], [/iPad/, 'iPad'], [/CrOS/, 'ChromeOS'],
+  [/Mac OS/, 'macOS'], [/Linux/, 'Linux']];
+
+function sessionDevice(s) {
+  const ua = s.userAgent || '';
+  const os = SYSTEMS.find(([re]) => re.test(ua))?.[1] || '';
+  if (s.client === 'android-app') return { title: clientLabel('android-app'), sub: t('App'), icon: 'android' };
+  const browser = BROWSERS.find(([re]) => re.test(ua))?.[1] || t('Browser');
+  const mobile = /Android|iPhone|iPad|Mobile/.test(ua);
+  return { title: os ? t('{browser} on {os}', { browser, os }) : browser, sub: t('Web browser'), icon: /iPad/.test(ua) ? 'tablet_mac' : mobile ? 'smartphone' : 'computer' };
+}
+
+function countryName(code) {
+  if (!code) return null;
+  try { return new Intl.DisplayNames([locale()], { type: 'region' }).of(code); } catch { return code; }
+}
+const flagEmoji = (code) => (code ? String.fromCodePoint(...[...code].map((c) => 0x1F1E6 + c.charCodeAt(0) - 65)) : '');
+
+function sessionsPage() {
+  const root = page('Devices & sessions', html`
+    <section class="card">
+      <div class="setting">
+        <div><h2 class="title-large emph">Where you’re signed in</h2>
+          <div class="setting-sub">Sign out anything you don’t recognise, then change your password.</div></div>
+      </div>
+      <div class="sessions seg tight">${loader('sm')}</div>
+      <div class="row-end"><button class="btn danger" type="button" data-revoke-all hidden>${icon('logout', 'sm')}Sign out all other sessions</button></div>
+    </section>
+    <p class="setting-sub center">Locations are approximate and come from your IP address.</p>`);
+  const box = root.querySelector('.sessions');
+  const all = root.querySelector('[data-revoke-all]');
+  const load = async () => {
+    try {
+      const { sessions } = await api('/me/sessions');
+      all.hidden = sessions.length < 2;
+      box.innerHTML = String(html`${sessions.map((s) => {
+        const d = sessionDevice(s);
+        const place = countryName(s.country);
+        const active = s.current ? t('Active now') : t('Last active {time}', { time: relTime(s.lastUsed || s.createdAt) });
+        return html`<div class="list-item session${s.current ? ' current' : ''}" data-sid="${s.id}">
+          <span class="li-icon session-icon">${icon(d.icon)}</span>
+          <div class="li-text">
+            <div class="li-head">${d.title}${s.current ? html` <span class="tag current">${t('This device')}</span>` : ''}</div>
+            <div class="li-sub">${place ? html`<span class="session-place">${flagEmoji(s.country)} ${place}</span> · ` : ''}${s.ip || t('Unknown IP')}</div>
+            <div class="li-sub">${d.sub} · ${active} · <span title="${fullTime(s.createdAt)}">${t('Signed in {date}', { date: new Date(s.createdAt).toLocaleDateString(locale(), { day: 'numeric', month: 'short', year: 'numeric' }) })}</span></div>
+          </div>
+          ${s.current ? '' : html`<button class="btn tonal sm" type="button" data-revoke="${s.id}">${t('Sign out')}</button>`}
+        </div>`;
+      })}`);
+    } catch (e) { box.textContent = e.message; }
+  };
+  load();
+  root.addEventListener('click', async (e) => {
+    const revoke = e.target.closest('[data-revoke]');
+    if (revoke) {
+      const row = revoke.closest('.session');
+      if (!await confirmDialog({ title: t('Sign out this session?'), body: row.querySelector('.li-head').textContent.trim(), confirm: t('Sign out'), danger: true })) return;
+      try { await api(`/me/sessions/${revoke.dataset.revoke}`, { method: 'DELETE' }); toast(t('Session signed out')); load(); } catch (err) { toast(err.message); }
+    }
+    if (e.target.closest('[data-revoke-all]')) {
+      if (!await confirmDialog({ title: t('Sign out other sessions?'), body: t('Every device except this one will be signed out.'), confirm: t('Sign out others'), danger: true })) return;
+      try {
+        const r = await api('/me/sessions', { method: 'DELETE' });
+        toast(r.revoked === 1 ? t('1 session signed out') : t('{n} sessions signed out', { n: r.revoked }));
+        load();
+      } catch (err) { toast(err.message); }
+    }
+  });
+  return { el: root, title: 'Devices & sessions' };
+}
+
+// ---------------------------------------------------------------- language
+
+function languageSummary() {
+  const pick = state.me.settings?.language;
+  return pick ? languageName(pick) : `${t('Automatic')} · ${languageName(locale())}`;
+}
+
+function languagePage() {
+  const pick = state.me.settings?.language || null;
+  const detected = state.instance?.detectedLanguage || 'en';
+  const where = countryName(state.instance?.country);
+  const option = (code, label, sub) => html`<label class="list-item lang-option">
+      <input type="radio" class="radio" name="lang" value="${code ?? ''}" ${(code ?? null) === pick ? html`checked` : ''}>
+      <div class="li-text"><div class="li-head" translate="${code ? 'no' : 'yes'}">${label}</div>${sub ? html`<div class="li-sub">${sub}</div>` : ''}</div>
+    </label>`;
+  const root = page('Language', html`
+    <section class="card">
+      <h2 class="title-large emph">Display language</h2>
+      <p class="setting-sub">Menus, buttons and messages. Posts are always shown as their authors wrote them.</p>
+      <div class="seg tight lang-list">
+        ${option(null, t('Automatic'), where
+    ? t('Based on where you sign in from ({place}): {lang}', { place: where, lang: languageName(detected) })
+    : t('Based on your location and browser: {lang}', { lang: languageName(detected) }))}
+        ${LANGUAGES.map((l) => option(l.code, l.name, l.code === 'en' ? '' : t(l.english)))}
+      </div>
+    </section>
+    <p class="setting-sub center">Saved to your account, so it follows you to every device.</p>`);
+  root.querySelector('.lang-list').addEventListener('change', async (e) => {
+    const code = e.target.value || null;
+    try {
+      await saveMe({ language: code });
+      storeLanguage(code);
+      location.reload(); // re-render everything in the new language
+    } catch (err) { toast(err.message); }
+  });
+  return { el: root, title: 'Language' };
+}
+
 export async function settingsView({ section } = {}) {
   switch (section) {
     case undefined: case '': return indexPage();
     case 'account': return accountPage();
+    case 'sessions': return sessionsPage();
+    case 'language': return languagePage();
     case 'privacy': return privacyPage();
     case 'notifications': return notificationsPage();
     case 'appearance': return appearancePage();

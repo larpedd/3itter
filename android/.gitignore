@@ -1,13 +1,8 @@
-node_modules/
-src-tauri/target/
-src-tauri/gen/android/.gradle/
-src-tauri/gen/android/build/
-src-tauri/gen/android/app/build/
-src-tauri/gen/android/buildSrc/build/
-src-tauri/gen/android/local.properties
-src-tauri/gen/android/keystore.properties
+target/
+dist/
+build/
 *.jks
 *.keystore
 *.apk
 *.aab
-dist/
+*.idsig

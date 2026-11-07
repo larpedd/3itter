@@ -262,6 +262,15 @@ CREATE TABLE IF NOT EXISTS announcements (
   created_at INTEGER NOT NULL,
   expires_at INTEGER
 );
+CREATE TABLE IF NOT EXISTS media (
+  id         TEXT PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  kind       TEXT NOT NULL,              -- video
+  src        TEXT NOT NULL,
+  size       INTEGER NOT NULL,
+  post_id    INTEGER,                    -- set once attached to a post
+  created_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS invites (
   code       TEXT PRIMARY KEY,
   created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
@@ -310,10 +319,16 @@ addColumn('posts', 'reply_policy', "TEXT NOT NULL DEFAULT 'everyone'"); // every
 addColumn('posts', 'views', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('posts', 'hidden_reply', 'INTEGER NOT NULL DEFAULT 0');          // hidden by the parent post's author
 addColumn('users', 'invited_with', 'TEXT');
+addColumn('users', 'language', 'TEXT');                                    // interface language; NULL = detect
+addColumn('users', 'show_client', 'INTEGER NOT NULL DEFAULT 1');           // show "3itter for …" on posts
+addColumn('posts', 'client', 'TEXT');
+addColumn('posts', 'video', 'TEXT');                                       // JSON {src, poster, alt}                                      // device code, see locale.js
 // sessions
 addColumn('sessions', 'user_agent', "TEXT NOT NULL DEFAULT ''");
 addColumn('sessions', 'ip', "TEXT NOT NULL DEFAULT ''");
 addColumn('sessions', 'last_used', 'INTEGER');
+addColumn('sessions', 'country', 'TEXT');
+addColumn('sessions', 'client', 'TEXT');
 
 db.exec(`
 CREATE UNIQUE INDEX IF NOT EXISTS posts_remote ON posts(remote_uri) WHERE remote_uri IS NOT NULL;
