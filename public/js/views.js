@@ -185,6 +185,7 @@ const NOTIF = {
   reply:   { icon: 'chat_bubble', text: 'replied to you', cls: 'reply' },
   mention: { icon: 'alternate_email', text: 'mentioned you', cls: 'reply' },
   quote:   { icon: 'format_quote', text: 'quoted your post', cls: 'reply' },
+  affiliation: { icon: 'apartment', text: 'invited you to be affiliated with them', cls: 'follow' },
 };
 
 function actorsText(n) {
@@ -205,7 +206,7 @@ function notifItem(n) {
       context: html`${icon(t.icon, 'xs')}<a href="/u/${n.actor.handle}">${n.actor.name}</a> ${t.text}`,
     });
   }
-  const href = n.post ? `/p/${n.post.id}` : n.actorCount > 1 ? `/u/${state.me.handle}/followers` : `/u/${n.actor.handle}`;
+  const href = n.type === 'affiliation' ? '/settings/affiliation' : n.post ? `/p/${n.post.id}` : n.actorCount > 1 ? `/u/${state.me.handle}/followers` : `/u/${n.actor.handle}`;
   return html`<a class="notif${unread}" href="${href}">
     <div class="notif-icon ${t.cls}">${icon(t.icon, 'filled')}</div>
     <div class="notif-main">
@@ -385,6 +386,7 @@ function followedByText({ users, count }) {
 }
 
 const PROFILE_TABS = [['', 'Posts'], ['replies', 'Replies'], ['media', 'Media'], ['likes', 'Likes']];
+const ORG_TABS = [['', 'Posts'], ['affiliates', 'Affiliates'], ['media', 'Media'], ['likes', 'Likes']];
 
 function profileHeader(u, tab) {
   const isMe = u.id === state.me.id;
@@ -405,11 +407,15 @@ function profileHeader(u, tab) {
         </div>
       </div>
       ${u.suspended ? html`<p class="profile-alert">${icon('block', 'sm')}This account is suspended. Only staff can see it.</p>` : ''}
-      <h2 class="profile-name headline-medium emph">${nameOf(u)} ${staffBadge(u.staff)}</h2>
+      <h2 class="profile-name headline-medium emph">${nameOf(u)} ${staffBadge(u.staff)}${u.org ? html`<span class="tag org-tag">${icon('apartment', 'xs')}Organization</span>` : ''}</h2>
       <div class="profile-handle"><span class="post-handle">@${u.handle}</span>
         ${u.pronouns ? html`<span class="pronouns" translate="no">${u.pronouns}</span>` : ''}
         ${u.followsYou ? html`<span class="tag">Follows you</span>` : ''}${u.isMuted ? html`<span class="tag">Muted</span>` : ''}
         ${remoteChip(u)}</div>
+      ${u.affiliation ? html`<a class="profile-aff" href="/u/${u.affiliation.handle}">
+        ${avatar({ ...u.affiliation, avatarShape: 'squircle' }, 'xs', { link: false })}
+        <span>${u.affiliation.label ? html`<b translate="no">${u.affiliation.label}</b> · ` : ''}Affiliated with <b translate="no">${u.affiliation.name}</b></span></a>` : ''}
+      ${u.bot ? html`<p class="profile-bot">${icon('smart_toy', 'sm')}<span>Automated${u.bot.owner ? html` · run by <a class="link" href="/u/${u.bot.owner}">@${u.bot.owner}</a>` : ''}</span></p>` : ''}
       ${u.bio ? html`<p class="profile-bio">${richText(u.bio, { domain: u.domain })}</p>` : ''}
       <div class="profile-meta">
         ${u.location ? html`<span>${icon('location_on', 'xs')}<span translate="no">${u.location}</span></span>` : ''}
@@ -425,7 +431,7 @@ function profileHeader(u, tab) {
         <span>${followedByText(u.followedBy)}</span></a>` : ''}
     </div>
     ${hiddenFeed ? '' : html`<nav class="tabs" aria-label="Profile sections">
-      ${PROFILE_TABS.map(([k, label]) => html`<a class="tab" href="/u/${u.handle}${k ? `/${k}` : ''}" ${tab === (k || 'posts') ? html`aria-current="page"` : ''}><span>${label}</span></a>`)}
+      ${(u.org ? ORG_TABS : PROFILE_TABS).map(([k, label]) => html`<a class="tab" href="/u/${u.handle}${k ? `/${k}` : ''}" ${tab === (k || 'posts') ? html`aria-current="page"` : ''}><span>${label}</span></a>`)}
     </nav>`}
   </section>`;
 }
@@ -450,7 +456,9 @@ export async function profileView({ handle, tab = 'posts' }) {
   } else if (u.blocksYou) {
     feed.innerHTML = String(emptyState({ icon: 'visibility_off', shape: 'pentagon', title: 'You can’t see these posts', body: `@${u.handle} has limited who can see their profile.` }));
   } else {
-    if (tab === 'media') {
+    if (tab === 'affiliates') {
+      feed.append(userList(`/orgs/${encodeURIComponent(u.handle)}/affiliates`, emptyState({ icon: 'apartment', title: 'No affiliates yet', body: 'Accounts affiliated with this organization will show up here.', shape: u.avatarShape })));
+    } else if (tab === 'media') {
       // Media tab: an image grid; each tile opens its post.
       feed.append(infiniteList({
         load: async (offset) => {
@@ -458,7 +466,7 @@ export async function profileView({ handle, tab = 'posts' }) {
           return { items: r.posts, next: r.next };
         },
         render: (p) => {
-          const im = (p.images?.length ? p.images : [{ src: p.image, alt: '' }])[0];
+          const im = (p.images?.length ? p.images : [{ src: p.image || p.video?.poster || '', alt: p.video?.alt || '' }])[0];
           const hide = p.sensitive || p.cw;
           return html`<a class="media-tile${hide ? ' hidden-media' : ''}" href="/p/${p.id}" aria-label="${im.alt || 'Post with image'}">
             <img src="${im.src}" alt="${im.alt}" loading="lazy">

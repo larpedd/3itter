@@ -66,7 +66,11 @@ export function richText(text, { domain = null } = {}) {
 export const verifiedBadge = () => html`<span class="vbadge" role="img" aria-label="Verified account" title="Verified account"><span class="vb-shape shape-sunny"></span><span class="icon filled">check</span></span>`;
 export const staffBadge = (role) => (role ? html`<span class="staff-badge">${icon(role === 'admin' ? 'shield_person' : 'shield', 'xs')}${role === 'admin' ? 'Admin' : 'Mod'}</span>` : '');
 // Display name, then verified badge, then the person's pride flags.
-export const nameOf = (u) => html`<span class="name"><span class="name-text" translate="no">${u.name}</span>${u.verified ? verifiedBadge() : ''}${u.flags?.length ? html`<span class="name-flags">${u.flags.map((f) => flagImg(f))}</span>` : ''}</span>`;
+// Affiliation badge: the organization's avatar, small and square, after the name.
+const affBadge = (a) => html`<span class="aff-badge" title="${a.label ? `${a.label} · ` : ''}Affiliated with ${a.name}">${a.avatar
+  ? html`<img src="${a.avatar}" alt="">` : html`<span style="--uh:${a.hue ?? 285}">${([...(a.name || a.handle || '?')][0] || '?').toUpperCase()}</span>`}</span>`;
+
+export const nameOf = (u) => html`<span class="name"><span class="name-text" translate="no">${u.name}</span>${u.verified ? verifiedBadge() : ''}${u.affiliation ? affBadge(u.affiliation) : ''}${u.bot ? html`<span class="bot-badge" title="Automated account">${icon('smart_toy', 'xs')}</span>` : ''}${u.flags?.length ? html`<span class="name-flags">${u.flags.map((f) => flagImg(f))}</span>` : ''}</span>`;
 export const flagImg = (id, cls = '') => {
   const f = FLAG_BY_ID.get(id);
   return f ? html`<img class="flag ${cls}" src="${flagSrc(id)}" alt="${f.label} flag" title="${f.label}" draggable="false">` : '';
@@ -163,6 +167,21 @@ function media(p) {
   </div>`;
 }
 
+// Link preview card for the first link in a post (fetched and cached by the server).
+export function linkCard(c) {
+  if (!c) return '';
+  let host = c.site;
+  try { host = new URL(c.url).hostname.replace(/^www\./, ''); } catch { /* keep site */ }
+  return html`<a class="link-card${c.large && c.image ? ' large' : ''}" href="${c.url}" target="_blank" rel="noopener noreferrer nofollow" translate="no">
+    ${c.image ? html`<span class="lc-media"><img src="${c.image}" alt="" loading="lazy"></span>` : html`<span class="lc-media lc-icon">${icon('link')}</span>`}
+    <span class="lc-text">
+      <span class="lc-site">${c.site && c.site !== host ? `${c.site} · ${host}` : host}</span>
+      <span class="lc-title">${c.title}</span>
+      ${c.description ? html`<span class="lc-desc">${c.description}</span>` : ''}
+    </span>
+  </a>`;
+}
+
 export function timeLeft(ts) {
   const s = Math.max(0, (ts - Date.now()) / 1000);
   if (s < 3600) return `${Math.max(1, Math.round(s / 60))} min`;
@@ -190,7 +209,7 @@ export function pollView(p) {
 
 // Text, media and poll; hidden behind the content warning when there is one.
 function postBody(p) {
-  const body = html`${p.text ? html`<div class="post-text">${richText(p.text, { domain: p.author.domain })}</div>` : ''}${media(p)}${pollView(p)}`;
+  const body = html`${p.text ? html`<div class="post-text">${richText(p.text, { domain: p.author.domain })}</div>` : ''}${media(p)}${linkCard(p.card)}${pollView(p)}`;
   if (!p.cw) return body;
   return html`<div class="cw"><div class="cw-head">${icon('warning', 'sm')}<span class="cw-text" translate="no">${p.cw}</span>
     <button class="btn tonal xs" type="button" data-action="toggle-cw" aria-expanded="false">Show</button></div>

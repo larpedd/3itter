@@ -286,6 +286,16 @@ export function hiddenIds(me) {
 
 const parseJson = (s, d) => { try { return s ? JSON.parse(s) : d; } catch { return d; } };
 
+// The active affiliation shown on a user (local organizations; remote users carry their own copy).
+export function affiliationOf(u) {
+  if (!u) return null;
+  if (u.domain) return parseJson(u.fed_affiliation, null)?.handle ? parseJson(u.fed_affiliation, null) : null;
+  const r = get(`SELECT a.label, o.handle, o.name, o.avatar, o.hue, o.avatar_shape, o.verified FROM affiliations a
+                 JOIN users o ON o.id = a.org_id WHERE a.user_id = :id AND a.status = 'active' AND o.suspended = 0 AND o.deleted_at IS NULL`, { id: u.id });
+  return r ? { handle: r.handle, name: r.name, avatar: r.avatar, hue: r.hue, avatarShape: r.avatar_shape, verified: !!r.verified, label: r.label } : null;
+}
+export const botInfo = (u) => (u?.is_bot ? { owner: u.bot_owner || null } : null);
+
 export function publicUser(u, me) {
   if (!u) return null;
   const out = {
@@ -295,7 +305,9 @@ export function publicUser(u, me) {
     pronouns: u.pronouns || '', flags: cleanFlags(parseJson(u.flags, [])),
     staff: u.role === 'admin' ? 'admin' : u.role === 'moderator' ? 'moderator' : null,
     pinnedPostId: u.pinned_post_id || null,
+    org: !!u.is_org, bot: botInfo(u), affiliation: affiliationOf(u),
   };
+  if (u.is_org) out.affiliates = get(`SELECT COUNT(*) AS n FROM affiliations WHERE org_id = :id AND status = 'active'`, { id: u.id }).n;
   if (me !== undefined) {
     const c = get(`SELECT
         (SELECT COUNT(*) FROM follows f JOIN users x ON x.id = f.follower_id WHERE f.followee_id = :id AND x.suspended = 0 AND x.deleted_at IS NULL) AS followers,
@@ -342,12 +354,17 @@ export const miniUser = (r) => ({
   id: r.uid, handle: r.handle, name: r.name, avatar: r.avatar, avatarShape: r.avatar_shape, hue: r.hue,
   verified: !!r.verified, domain: r.domain || null,
   flags: r.flags ? cleanFlags(parseJson(r.flags, [])) : [],
+  bot: r.is_bot ? { owner: r.bot_owner || null } : null,
+  affiliation: r.aff_handle ? { handle: r.aff_handle, name: r.aff_name, avatar: r.aff_avatar, hue: r.aff_hue, avatarShape: r.aff_shape, label: r.aff_label }
+    : r.fed_affiliation ? parseJson(r.fed_affiliation, null) : null,
 });
 
 export const POST_SELECT = `
-  SELECT p.id, p.author_id, p.text, p.image, p.images, p.sensitive, p.cw, p.edited_at, p.reply_policy, p.views, p.hidden_reply, p.client, p.video,
+  SELECT p.id, p.author_id, p.text, p.image, p.images, p.sensitive, p.cw, p.edited_at, p.reply_policy, p.views, p.hidden_reply, p.client, p.video, p.card_url,
+         lc.title AS card_title, lc.description AS card_description, lc.site AS card_site, lc.image AS card_image, lc.large AS card_large,
          p.reply_to, p.quote_of, p.deleted, p.created_at, p.remote_uri,
-         u.id AS uid, u.handle, u.name, u.avatar, u.avatar_shape, u.hue, u.verified, u.domain, u.flags,
+         u.id AS uid, u.handle, u.name, u.avatar, u.avatar_shape, u.hue, u.verified, u.domain, u.flags, u.is_bot, u.bot_owner, u.fed_affiliation,
+         ao.handle AS aff_handle, ao.name AS aff_name, ao.avatar AS aff_avatar, ao.hue AS aff_hue, ao.avatar_shape AS aff_shape, af.label AS aff_label,
          MAX((SELECT COUNT(*) FROM likes WHERE post_id = p.id), COALESCE(p.fed_likes, 0)) AS likes,
          MAX((SELECT COUNT(*) FROM reposts WHERE post_id = p.id), COALESCE(p.fed_reposts, 0)) AS reposts,
          MAX((SELECT COUNT(*) FROM posts r WHERE r.reply_to = p.id AND r.deleted = 0), COALESCE(p.fed_replies, 0)) AS replies,
@@ -356,7 +373,10 @@ export const POST_SELECT = `
          EXISTS(SELECT 1 FROM reposts   WHERE post_id = p.id AND user_id = :me) AS reposted,
          EXISTS(SELECT 1 FROM bookmarks WHERE post_id = p.id AND user_id = :me) AS bookmarked,
          EXISTS(SELECT 1 FROM follows WHERE follower_id = p.author_id AND followee_id = :me) AS author_follows_me
-  FROM posts p JOIN users u ON u.id = p.author_id`;
+  FROM posts p JOIN users u ON u.id = p.author_id
+  LEFT JOIN link_cards lc ON lc.url = p.card_url AND lc.ok = 1
+  LEFT JOIN affiliations af ON af.user_id = u.id AND af.status = 'active'
+  LEFT JOIN users ao ON ao.id = af.org_id AND ao.suspended = 0 AND ao.deleted_at IS NULL`;
 
 export function postImages(r) {
   const list = parseJson(r.images, null);
@@ -374,7 +394,11 @@ function rowToPost(r) {
   const images = postImages(r);
   return {
     id: r.id, uri: r.remote_uri || `${DOMAIN}/${r.id}`, remote: !!r.remote_uri,
-    text: r.text, image: images[0]?.src || null, images, video: postVideo(r), sensitive: !!r.sensitive, cw: r.cw || '',
+    text: r.text, image: images[0]?.src || null, images, video: postVideo(r),
+    // Link preview, unless the post has its own media.
+    card: r.card_title && !images.length && !r.video ? {
+      url: r.card_url, title: r.card_title, description: r.card_description, site: r.card_site, image: r.card_image, large: !!r.card_large,
+    } : null, sensitive: !!r.sensitive, cw: r.cw || '',
     editedAt: r.edited_at || null, replyPolicy: r.reply_policy || 'everyone', client: r.client || null, createdAt: r.created_at,
     _authorFollowsMe: !!r.author_follows_me,
     author: miniUser(r),

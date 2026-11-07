@@ -12,11 +12,12 @@ import crypto from 'node:crypto';
 import { all, get, run, tx, getSetting, setSetting } from './db.js';
 import {
   DOMAIN, PUBLIC_URL, VERSION, SHAPES, cleanFlags, MAX_POST_LEN, MAX_MSG_LEN, MAX_IMAGE_BYTES, instance, absUrl, saveImageBuffer,
-  notify, notifyMentions, publishMessage, softDeletePost, localUserByHandle, isBlockedBetween, audit,
+  notify, notifyMentions, publishMessage, affiliationOf, softDeletePost, localUserByHandle, isBlockedBetween, audit,
   postImages, postVideo, pollCounts, MAX_IMAGES, REPLY_POLICIES,
 } from './core.js';
 import { HttpError, fail } from './http.js';
 import { CLIENTS } from './locale.js';
+import { attachCard } from './unfurl.js';
 
 export const PROTOCOL = 1;
 const MAX_SKEW_MS = 5 * 60_000;
@@ -148,6 +149,8 @@ export function userObject(u) {
     verified: !!u.verified, createdAt: u.created_at,
     pronouns: u.pronouns || '', flags: cleanFlags(JSON.parse(u.flags || '[]')),
     counts: { followers: c.followers, following: c.following, posts: c.posts },
+    org: !!u.is_org, bot: !!u.is_bot,
+    affiliation: (() => { const a = affiliationOf(u); return a ? { handle: a.handle, name: a.name, avatar: absUrl(a.avatar), hue: a.hue, label: a.label } : null; })(),
   };
 }
 
@@ -250,6 +253,12 @@ export async function upsertRemoteUser(obj, peer) {
     run(`UPDATE users SET name = :name, bio = :bio, location = :location, website = :website, avatar_shape = :shape,
            hue = :hue, verified = :verified, pronouns = :pronouns, flags = :flags, fed_counts = :counts WHERE id = :id`, { ...fields, id: u.id });
   }
+  // Labels: automated account and (same-instance) affiliation.
+  const aff = obj.affiliation && /^[A-Za-z0-9_]{1,15}$/.test(String(obj.affiliation.handle)) ? {
+    handle: `${obj.affiliation.handle}@${peer.domain}`, name: s(obj.affiliation.name, 50) || obj.affiliation.handle,
+    avatar: await cacheRemoteImage(obj.affiliation.avatar, peer), hue: int(obj.affiliation.hue, 0, 359, 285), label: s(obj.affiliation.label, 30),
+  } : null;
+  run('UPDATE users SET is_bot = :b, fed_affiliation = :a WHERE id = :id', { b: obj.bot ? 1 : 0, a: aff ? JSON.stringify(aff) : null, id: u.id });
   for (const [key, srcCol] of [['avatar', 'remote_avatar_src'], ['banner', 'remote_banner_src']]) {
     const src = obj[key] || null;
     if (src === u[srcCol]) continue;
@@ -300,6 +309,7 @@ export async function upsertRemotePost(obj, peer) {
       edited: Number.isInteger(obj.editedAt) ? obj.editedAt : null,
       reply: replyTo, quote: quoteOf, t: created, uri: obj.uri, ...counts, client: CLIENTS.includes(obj.client) ? obj.client : null });
     const pid = Number(r.lastInsertRowid);
+    if (!images.length && !video) setImmediate(() => attachCard(pid, text, null));
     if (poll) run('INSERT INTO polls (post_id, options, multiple, ends_at, fed_counts) VALUES (:p, :o, :m, :e, :f)',
       { p: pid, o: JSON.stringify(poll.options), m: poll.multiple ? 1 : 0, e: poll.endsAt, f: JSON.stringify({ counts: poll.counts, voters: poll.voters }) });
     const notified = new Set();

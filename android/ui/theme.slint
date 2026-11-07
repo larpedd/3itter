@@ -6,7 +6,9 @@ export global Theme {
     // Filled in from Rust: one list per colour scheme, in the order of the roles below.
     in property <[color]> light;
     in property <[color]> dark;
-    out property <bool> is-dark: Palette.color-scheme == ColorScheme.dark;
+    // "system", "light" or "dark" (Settings → Appearance).
+    in-out property <string> mode: "system";
+    out property <bool> is-dark: mode == "dark" || (mode == "system" && Palette.color-scheme == ColorScheme.dark);
     property <[color]> s: is-dark ? dark : light;
 
     out property <color> primary: s[0];

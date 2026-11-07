@@ -12,30 +12,36 @@ import { sendIndex, oembed, mastodonStatus, activityNote } from './embeds.js';
 import './api.js';
 import './admin.js';
 import './passkeys.js';
+import './orgs.js';
 import { startScheduler, countAnonymousView } from './extras.js';
 import { receiveVideo, cleanUnusedMedia } from './media.js';
 import { openStream } from './realtime.js';
+import { tokenAuth, checkTokenAccess } from './orgs.js';
 
 const PUBLIC_DIR = fileURLToPath(new URL('../public', import.meta.url));
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
 
 // Raw video upload: the body is the file itself, so it skips the JSON parser.
-async function handleVideoUpload(req, res) {
+async function handleVideoUpload(req, res, bearer) {
   const origin = req.headers.origin;
-  if (origin) {
+  if (origin && !bearer) {
     let host;
     try { host = new URL(origin).host; } catch { fail(403, 'Bad origin.'); }
     if (host !== req.headers.host) fail(403, 'Cross-origin request blocked.');
   }
-  const me = currentSession(req)?.user;
+  const me = bearer?.user || currentSession(req)?.user;
   if (!me) fail(401, 'Please sign in.');
   json(res, 200, await receiveVideo(req, me));
 }
 
 async function handleApi(req, res, url) {
-  if (url.pathname === '/api/media/video' && req.method === 'POST') return handleVideoUpload(req, res);
+
+  // Bots and scripts: Authorization: Bearer 3tt_… (personal API tokens, see orgs.js).
+  const bearer = tokenAuth(req);
+  if (bearer) checkTokenAccess(bearer, req.method, url.pathname);
+  if (url.pathname === '/api/media/video' && req.method === 'POST') return handleVideoUpload(req, res, bearer);
   if (url.pathname === '/api/stream' && req.method === 'GET') {
-    const me = currentSession(req)?.user;
+    const me = bearer?.user || currentSession(req)?.user;
     if (!me) fail(401, 'Please sign in.');
     return openStream(req, res, me.id);
   }
@@ -47,9 +53,9 @@ async function handleApi(req, res, url) {
   const { r, m } = match;
   let body = {};
   if (req.method !== 'GET') {
-    // CSRF defence: mutating requests must be same-origin JSON.
+    // CSRF defence: mutating requests must be same-origin JSON (token requests carry no cookies).
     const origin = req.headers.origin;
-    if (origin) {
+    if (origin && !bearer) {
       let host;
       try { host = new URL(origin).host; } catch { fail(403, 'Bad origin.'); }
       if (host !== req.headers.host) fail(403, 'Cross-origin request blocked.');
@@ -61,7 +67,7 @@ async function handleApi(req, res, url) {
       if (!body || typeof body !== 'object' || Array.isArray(body)) fail(400, 'Invalid JSON body.');
     }
   }
-  const session = currentSession(req);
+  const session = bearer ? { user: bearer.user, tokenHash: null, token: true } : currentSession(req);
   const me = session?.user || null;
   if (r.auth && !me) fail(401, 'Please sign in.');
   if (r.auth === 'staff' && !isStaff(me)) fail(403, 'Staff only.');

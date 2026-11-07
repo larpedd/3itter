@@ -6,7 +6,7 @@ import { api } from './lib/api.js';
 import { html, el } from './lib/html.js';
 import { state, postStore, remember, on, emit } from './store.js';
 import {
-  icon, avatar, toast, openMenu, openPopover, postCard, relTime, confirmDialog, lightbox, refreshPost, refreshPoll, postImagesOf, loader, emptyState, closePopover, compact, followBtn, topBar, nameOf,
+  icon, avatar, toast, openMenu, openPopover, postCard, relTime, confirmDialog, lightbox, refreshPost, refreshPoll, postImagesOf, loader, emptyState, closePopover, compact, followBtn, topBar, nameOf, replacePost,
 } from './ui.js';
 import { openComposer, openEditProfile, openReport, openEditPost, openEditHistory, openShortcuts, openPostList } from './dialogs.js';
 import * as V from './views.js';
@@ -14,6 +14,7 @@ import { settingsView } from './settings.js';
 import { listsView, listView, scheduledView, openListPicker } from './listsView.js';
 import { adminView } from './adminView.js';
 import { termsView, privacyView } from './docs.js';
+import { developersView } from './developers.js';
 import { passkeysSupported, conditionalMediationAvailable, signInWithPasskey, registerPasskey } from './lib/webauthn.js';
 import { t as tr, setLanguage, resolveLanguage, storedLanguage, storeLanguage, locale, languageName, LANGUAGES } from './lib/i18n.js';
 
@@ -174,6 +175,13 @@ function connectStream() {
     const who = n.actor?.name || n.actor?.handle || '';
     announce({ title: `${who} ${tr(VERBS[n.type] || 'interacted with you')}`, body: n.post?.cw || n.post?.text || '', href: n.post ? `/p/${n.post.id}` : `/u/${n.actor?.handle}`, tag: `3itter-n-${n.type}-${n.post?.id || n.actor?.id}` });
   });
+  stream.addEventListener('card', async (e) => {
+    try {
+      const { postId } = JSON.parse(e.data);
+      const { post } = await api(`/posts/${postId}`);
+      replacePost(post);
+    } catch { /* ignore */ }
+  });
   stream.addEventListener('message', (e) => {
     let m;
     try { m = JSON.parse(e.data); } catch { return; }
@@ -219,10 +227,11 @@ const ROUTES = [
   [/^\/settings(?:\/(\w+))?$/, (m) => settingsView({ section: m[1] })],
   [/^\/admin(?:\/(\w+))?$/, (m) => adminView({ tab: m[1] || 'overview' })],
   [/^\/terms$/, () => termsView()],
+  [/^\/developers$/, () => developersView()],
   [/^\/privacy$/, () => privacyView()],
   [/^\/p\/(\d+)$/, (m) => V.postView({ id: m[1] })],
   [/^\/u\/(\w{1,15}(?:@[\w.:-]+)?)\/(followers|following)$/, (m) => V.followsView({ handle: m[1], list: m[2] })],
-  [/^\/u\/(\w{1,15}(?:@[\w.:-]+)?)(?:\/(replies|media|likes))?$/, (m) => V.profileView({ handle: m[1], tab: m[2] || 'posts' })],
+  [/^\/u\/(\w{1,15}(?:@[\w.:-]+)?)(?:\/(replies|media|likes|affiliates))?$/, (m) => V.profileView({ handle: m[1], tab: m[2] || 'posts' })],
 ];
 
 let current = null;          // { key, view }
@@ -307,7 +316,7 @@ function navigate(to, { replace = false } = {}) {
   if (url.origin !== location.origin) { location.href = to; return; }
   if (!state.me) {
     history.pushState(null, '', url.pathname);
-    if (url.pathname === '/terms' || url.pathname === '/privacy') renderPublicDoc(); else renderAuth();
+    if (['/terms', '/privacy', '/developers'].includes(url.pathname)) renderPublicDoc(); else renderAuth();
     return;
   }
   const target = url.pathname + url.search;
@@ -1077,7 +1086,7 @@ async function addPasskeyNow() {
 
 // Terms/Privacy are readable without an account.
 function renderPublicDoc() {
-  const view = location.pathname === '/terms' ? termsView({ standalone: true }) : privacyView({ standalone: true });
+  const view = location.pathname === '/terms' ? termsView({ standalone: true }) : location.pathname === '/developers' ? developersView({ standalone: true }) : privacyView({ standalone: true });
   document.body.dataset.route = 'doc';
   document.title = `${tr(view.title)} / ${APP_NAME}`;
   app.replaceChildren(view.el);
@@ -1112,9 +1121,9 @@ async function start(user) {
     if (inst?.name) APP_NAME = inst.name;
     if (user) return start(user);
     await setLanguage(resolveLanguage({ user: null, detected: inst?.detectedLanguage }));
-    if (location.pathname === '/terms' || location.pathname === '/privacy') renderPublicDoc();
+    if (['/terms', '/privacy', '/developers'].includes(location.pathname)) renderPublicDoc();
     else renderAuth();
-    addEventListener('popstate', () => { if (!state.me) (location.pathname === '/terms' || location.pathname === '/privacy' ? renderPublicDoc : renderAuth)(); });
+    addEventListener('popstate', () => { if (!state.me) (['/terms', '/privacy', '/developers'].includes(location.pathname) ? renderPublicDoc : renderAuth)(); });
   } catch {
     app.innerHTML = String(emptyState({ icon: 'cloud_off', title: 'Can’t reach the server', body: 'Check that the 3itter server is running, then reload.' }));
   }

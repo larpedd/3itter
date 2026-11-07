@@ -262,6 +262,37 @@ CREATE TABLE IF NOT EXISTS announcements (
   created_at INTEGER NOT NULL,
   expires_at INTEGER
 );
+CREATE TABLE IF NOT EXISTS affiliations (
+  id          INTEGER PRIMARY KEY,
+  org_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  label       TEXT NOT NULL DEFAULT '',
+  status      TEXT NOT NULL DEFAULT 'pending',   -- pending | active
+  created_at  INTEGER NOT NULL,
+  accepted_at INTEGER,
+  UNIQUE (org_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS affiliations_user ON affiliations(user_id, status);
+CREATE TABLE IF NOT EXISTS api_tokens (
+  id         INTEGER PRIMARY KEY,
+  user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  name       TEXT NOT NULL,
+  scopes     TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  prefix     TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  last_used  INTEGER
+);
+CREATE TABLE IF NOT EXISTS link_cards (
+  url         TEXT PRIMARY KEY,
+  title       TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '',
+  site        TEXT NOT NULL DEFAULT '',
+  image       TEXT,
+  large       INTEGER NOT NULL DEFAULT 0,
+  ok          INTEGER NOT NULL DEFAULT 0,
+  fetched_at  INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS media (
   id         TEXT PRIMARY KEY,
   user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -319,10 +350,15 @@ addColumn('posts', 'reply_policy', "TEXT NOT NULL DEFAULT 'everyone'"); // every
 addColumn('posts', 'views', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('posts', 'hidden_reply', 'INTEGER NOT NULL DEFAULT 0');          // hidden by the parent post's author
 addColumn('users', 'invited_with', 'TEXT');
+addColumn('users', 'is_org', 'INTEGER NOT NULL DEFAULT 0');              // organization (can have affiliates)
+addColumn('users', 'is_bot', 'INTEGER NOT NULL DEFAULT 0');              // "Automated" label
+addColumn('users', 'bot_owner', 'TEXT');                                   // handle of the person running the bot
+addColumn('users', 'fed_affiliation', 'TEXT');                             // remote users: their affiliation (JSON)
 addColumn('users', 'language', 'TEXT');                                    // interface language; NULL = detect
 addColumn('users', 'show_client', 'INTEGER NOT NULL DEFAULT 1');           // show "3itter for …" on posts
 addColumn('posts', 'client', 'TEXT');
-addColumn('posts', 'video', 'TEXT');                                       // JSON {src, poster, alt}                                      // device code, see locale.js
+addColumn('posts', 'video', 'TEXT');
+addColumn('posts', 'card_url', 'TEXT');                                    // first link in the text, see unfurl.js                                       // JSON {src, poster, alt}                                      // device code, see locale.js
 // sessions
 addColumn('sessions', 'user_agent', "TEXT NOT NULL DEFAULT ''");
 addColumn('sessions', 'ip', "TEXT NOT NULL DEFAULT ''");

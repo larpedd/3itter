@@ -15,6 +15,17 @@ export struct Author {
     avatar-url: string,
     verified: bool,
     pronouns: string,
+    flags: [image],
+    flag-urls: string,
+    bot: bool,
+    has-aff: bool,
+    aff-name: string,
+    aff-handle: string,
+    aff-label: string,
+    aff-letter: string,
+    aff-color: color,
+    aff-avatar: image,
+    aff-url: string,
 }
 
 export struct Post {
@@ -43,6 +54,13 @@ export struct Post {
     quote-text: string,
     quote-author: string,
     edited: bool,
+    card-url: string,
+    card-title: string,
+    card-site: string,
+    card-desc: string,
+    card-image: image,
+    card-image-url: string,
+    card-large: bool,
 }
 
 // Material Symbols glyph, drawn from the bundled icon font (ligatures: "home", "favorite", …).
@@ -191,6 +209,40 @@ export component Verified inherits Icon {
     color: Theme.primary;
 }
 
+// Badges after a name: verified, affiliation (the organization's avatar), automated, pride flags.
+export component NameBadges inherits HorizontalLayout {
+    in property <Author> author;
+    in property <length> size: 17px;
+    spacing: 4px;
+    horizontal-stretch: 0;
+    if author.verified: Verified { size: root.size; }
+    if author.has-aff: Rectangle {
+        width: root.size;
+        height: root.size;
+        y: (parent.height - self.height) / 2;
+        border-radius: root.size * 0.28;
+        clip: true;
+        background: author.aff-color;
+        Text { text: author.aff-letter; font-size: root.size * 0.55; font-weight: 800; color: #ffffffe0; }
+        Image { width: 100%; height: 100%; source: author.aff-avatar; image-fit: cover; }
+    }
+    if author.bot: Rectangle {
+        width: root.size + 2px;
+        height: root.size;
+        y: (parent.height - self.height) / 2;
+        border-radius: 6px;
+        background: Theme.tertiary-container;
+        Icon { name: "smart_toy"; size: root.size * 0.8; color: Theme.on-tertiary-container; }
+    }
+    for f in author.flags: Image {
+        source: f;
+        width: root.size * 1.3;
+        height: root.size;
+        y: (parent.height - self.height) / 2;
+        image-fit: contain;
+    }
+}
+
 export component Divider inherits Rectangle {
     height: 1px;
     background: Theme.outline-variant;
@@ -250,6 +302,7 @@ export component PostCard inherits Rectangle {
     callback bookmark();
     callback share();
     callback more();
+    callback open-link(string);
     property <bool> cw-open;
     property <bool> show-body: post.cw == "" || cw-open;
     property <length> top-pad: post.context != "" ? 10px : 16px;
@@ -291,7 +344,7 @@ export component PostCard inherits Rectangle {
                 HorizontalLayout {
                     spacing: 4px;
                     Text { text: post.author.name; font-weight: 700; font-size: Type.body; color: Theme.on-surface; overflow: elide; horizontal-stretch: 0; }
-                    if post.author.verified: Verified { size: 17px; }
+                    NameBadges { author: post.author; }
                     Rectangle { horizontal-stretch: 1; }
                 }
                 Text { text: "@" + post.author.handle; color: Theme.on-surface-variant; font-size: Type.label + 1px; overflow: elide; }
@@ -302,7 +355,7 @@ export component PostCard inherits Rectangle {
             spacing: 4px;
             height: 24px;
             Text { text: post.author.name; font-weight: 700; font-size: Type.body; color: Theme.on-surface; overflow: elide; horizontal-stretch: 0; vertical-alignment: center; }
-            if post.author.verified: Verified { size: 17px; }
+            NameBadges { author: post.author; }
             Text {
                 text: "@" + post.author.handle + " · " + post.time;
                 color: Theme.on-surface-variant;
@@ -356,6 +409,48 @@ export component PostCard inherits Rectangle {
                 border-radius: 12px;
                 background: #000000a0;
                 Text { text: "1/\{post.image-count}"; color: white; font-size: Type.small; font-weight: 700; }
+            }
+        }
+        // Link preview
+        if post.card-title != "" && show-body: card := Rectangle {
+            border-radius: 18px;
+            border-width: 1px;
+            border-color: Theme.outline-variant;
+            background: Theme.surface-low;
+            clip: true;
+            TouchArea { clicked => { root.open-link(post.card-url); } }
+            VerticalLayout {
+                if post.card-large && post.card-image-url != "": Rectangle {
+                    height: self.width / 1.91;
+                    background: Theme.surface-high;
+                    Image { width: 100%; height: 100%; source: post.card-image; image-fit: cover; }
+                }
+                Rectangle {
+                    if !post.card-large && post.card-image-url != "": Rectangle {
+                        x: 10px;
+                        y: 10px;
+                        width: 72px;
+                        height: 72px;
+                        border-radius: 12px;
+                        clip: true;
+                        background: Theme.surface-high;
+                        Image { width: 100%; height: 100%; source: post.card-image; image-fit: cover; }
+                    }
+                    VerticalLayout {
+                        padding: 12px;
+                        padding-left: !post.card-large && post.card-image-url != "" ? 94px : 14px;
+                        spacing: 2px;
+                        min-height: !post.card-large && post.card-image-url != "" ? 92px : 0px;
+                        alignment: center;
+                        HorizontalLayout {
+                            spacing: 4px;
+                            Icon { name: "link"; size: 14px; color: Theme.on-surface-variant; }
+                            Text { text: post.card-site; font-size: Type.small; color: Theme.on-surface-variant; overflow: elide; horizontal-stretch: 1; }
+                        }
+                        Text { text: post.card-title; font-weight: 700; font-size: Type.label + 1px; color: Theme.on-surface; wrap: word-wrap; }
+                        if post.card-desc != "": Text { text: post.card-desc; font-size: Type.small; color: Theme.on-surface-variant; wrap: word-wrap; }
+                    }
+                }
             }
         }
         if post.quote-author != "": Rectangle {
@@ -506,5 +601,143 @@ export component BrandMark inherits Image {
     width: size;
     height: size;
     source: @image-url("logo.png");
+    image-fit: contain;
+}
+
+// ------------------------------------------------------------------ expressive inputs
+
+// Filled, rounded text field (M3 Expressive): tonal container, focus ring, optional leading icon and
+// a show/hide eye for passwords. Replaces the stock outlined LineEdit.
+export component TextField inherits Rectangle {
+    in property <string> placeholder;
+    in property <string> icon;
+    in property <bool> password;
+    in property <length> field-height: 56px;
+    in property <length> font-size: Type.body + 2px;
+    in property <InputType> keyboard: InputType.text;
+    in-out property <string> text <=> input.text;
+    out property <bool> has-focus: input.has-focus;
+    callback accepted();
+    callback edited();
+    property <bool> reveal;
+    public function focus-input() { input.focus(); }
+    public function clear() { input.text = ""; }
+    height: field-height;
+    border-radius: input.has-focus ? 16px : field-height / 2;
+    background: Theme.surface-highest;
+    border-width: input.has-focus ? 2px : 0px;
+    border-color: Theme.primary;
+    animate border-radius { duration: Theme.default; easing: cubic-bezier(0.34, 1.56, 0.64, 1); }
+    TouchArea { clicked => { input.focus(); } }
+    HorizontalLayout {
+        padding-left: icon != "" ? 14px : 20px;
+        padding-right: password ? 4px : 18px;
+        spacing: 12px;
+        if icon != "": Icon { name: icon; size: 22px; color: input.has-focus ? Theme.primary : Theme.on-surface-variant; }
+        Rectangle {
+            horizontal-stretch: 1;
+            if input.text == "": Text {
+                x: 0;
+                width: parent.width;
+                height: parent.height;
+                text: placeholder;
+                font-size: root.font-size;
+                color: Theme.on-surface-variant;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            input := TextInput {
+                x: 0;
+                width: parent.width;
+                height: parent.height;
+                single-line: true;
+                vertical-alignment: center;
+                font-size: root.font-size;
+                color: Theme.on-surface;
+                selection-background-color: Theme.primary.with-alpha(0.35);
+                selection-foreground-color: Theme.on-surface;
+                input-type: root.password && !root.reveal ? InputType.password : root.keyboard;
+                accepted => { root.accepted(); }
+                edited => { root.edited(); }
+            }
+        }
+        if password: IconButton {
+            icon: reveal ? "visibility_off" : "visibility";
+            size: 44px;
+            y: (parent.height - self.height) / 2;
+            label: "Show password";
+            clicked => { reveal = !reveal; }
+        }
+    }
+}
+
+// M3 switch: the thumb grows and shows a check when on.
+export component M3Switch inherits Rectangle {
+    in-out property <bool> checked;
+    callback toggled(bool);
+    width: 52px;
+    height: 32px;
+    border-radius: 16px;
+    background: checked ? Theme.primary : Theme.surface-highest;
+    border-width: checked ? 0px : 2px;
+    border-color: Theme.outline;
+    animate background { duration: Theme.fast; }
+    accessible-role: switch;
+    accessible-checked: checked;
+    accessible-action-default => { checked = !checked; toggled(checked); }
+    thumb := Rectangle {
+        property <length> size: touch.pressed ? 28px : checked ? 24px : 16px;
+        width: size;
+        height: size;
+        border-radius: size / 2;
+        x: checked ? parent.width - size - 4px : (touch.pressed ? 2px : 8px);
+        y: (parent.height - size) / 2;
+        background: checked ? Theme.on-primary : Theme.outline;
+        animate x, width, height { duration: Theme.default; easing: cubic-bezier(0.34, 1.56, 0.64, 1); }
+        if checked: Icon { name: "check"; size: 16px; color: Theme.primary; }
+    }
+    touch := TouchArea { clicked => { root.checked = !root.checked; root.toggled(root.checked); } }
+}
+
+// Character counter ring for the composer.
+export component CharRing inherits Rectangle {
+    in property <int> used;
+    in property <int> limit: 500;
+    property <float> frac: min(1.0, max(0.0, used / max(1, limit)));
+    property <int> left: limit - used;
+    property <angle> end: -90deg + 359.9deg * frac;
+    property <color> tone: left < 0 ? Theme.error : left <= 20 ? #f2a93b : Theme.primary;
+    width: left <= 20 ? 34px : 28px;
+    height: self.width;
+    animate width { duration: Theme.fast; }
+    Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        stroke: Theme.surface-highest;
+        stroke-width: 3px;
+        commands: "M 12 2 A 10 10 0 1 1 11.99 2";
+    }
+    if used > 0: Path {
+        width: 100%;
+        height: 100%;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        stroke: tone;
+        stroke-width: 3px;
+        commands: "M 12 2 A 10 10 0 \{frac > 0.5 ? 1 : 0} 1 \{12 + 10 * cos(end)} \{12 + 10 * sin(end)}";
+    }
+    if left <= 20: Text { text: "\{left}"; font-size: 10px; font-weight: 700; color: tone; }
+}
+
+// One of the M3 shapes (ui/shapes/*.png), tinted with a theme colour.
+export component Shape inherits Image {
+    in property <string> kind: "cookie9";
+    in property <brush> tint: Theme.primary;
+    source: kind == "clover4" ? @image-url("shapes/clover4.png") : kind == "flower" ? @image-url("shapes/flower.png")
+        : kind == "sunny" ? @image-url("shapes/sunny.png") : kind == "burst" ? @image-url("shapes/burst.png")
+        : kind == "cookie4" ? @image-url("shapes/cookie4.png") : @image-url("shapes/cookie9.png");
+    colorize: tint;
     image-fit: contain;
 }

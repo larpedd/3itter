@@ -8,6 +8,7 @@ mod app;
 mod i18n;
 mod images;
 mod notify;
+mod picker;
 mod store;
 mod theme;
 mod timefmt;

@@ -162,6 +162,14 @@ fn run_step(ui: &AppWindow, cmd: &str, rest: &str, out_dir: &std::path::Path) {
                 "like" => s.invoke_like(arg.parse().unwrap_or(1)),
                 "set-language" => s.invoke_set_language(arg.into()),
                 "logout" => s.invoke_logout(),
+                "refresh" => s.invoke_refresh(),
+                "pick-images" => s.invoke_compose_pick_images(),
+                "pick-video" => s.invoke_compose_pick_video(),
+                "poll" => s.set_compose_poll(true),
+                "policy-menu" => s.invoke_compose_policy_menu(),
+                "schedule-menu" => s.invoke_compose_schedule_menu(),
+                "sheet-pick" => s.invoke_sheet_pick(arg.parse().unwrap_or(0)),
+                "theme" => s.invoke_set_theme(arg.into()),
                 "login" => {
                     let (h, p) = arg.split_once(' ').unwrap_or((arg, ""));
                     s.invoke_login(h.into(), p.into())

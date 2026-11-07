@@ -6,6 +6,7 @@ import { fail, route } from './http.js';
 import { LANGS, CLIENTS, detectLanguage, countryOf, clientOf } from './locale.js';
 import { prepareVideo, markVideoUsed, MAX_VIDEO_BYTES } from './media.js';
 import { forYouIds } from './feed.js';
+import { attachCard } from './unfurl.js';
 import { publish } from './realtime.js';
 import {
   DOMAIN, VERSION, ADMIN_HANDLE, PAGE, MAX_POST_LEN, MAX_IMAGES, EDIT_WINDOW_MS, REPLY_POLICIES, canReplyTo, parsePollInput, MAX_MSG_LEN, SHAPES, NOTIF_TYPES, REPORT_REASONS, HANDLE_RE, HASHTAG_RE,
@@ -384,6 +385,7 @@ export function insertPost(me, p) {
     return pid;
   });
   federatePost(id);
+  attachCard(id, p.text, me.id);
   return id;
 }
 
@@ -407,6 +409,7 @@ route('PATCH', '/api/posts/:id', ({ me, params, body }) => {
     run('UPDATE posts SET text = :text, cw = :cw, edited_at = :t WHERE id = :id', { text, cw, t: Date.now(), id: post.id });
   });
   federatePostUpdate(post.id);
+  if (text !== post.text) attachCard(post.id, text, me.id);
   return { post: loadPosts([post.id], me.id)[0] };
 });
 

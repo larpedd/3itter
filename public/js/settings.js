@@ -20,6 +20,8 @@ const SECTIONS = [
   ['appearance', 'palette', 'Appearance', 'Theme, colour, text size and motion'],
   ['language', 'translate', 'Language', null],
   ['federation', 'hub', 'Federation', 'Your federated address and connected instances'],
+  ['affiliation', 'apartment', 'Affiliation', 'Organizations you’re part of, or your organization’s accounts'],
+  ['developer', 'smart_toy', 'Bots & API', 'API tokens, the “Automated” label and developer docs'],
   ['about', 'info', 'About this instance', 'Rules, terms, privacy and version'],
 ];
 
@@ -635,6 +637,144 @@ function languagePage() {
   return { el: root, title: 'Language' };
 }
 
+// ---------------------------------------------------------------- affiliation
+
+function affiliationPage() {
+  const root = page('Affiliation', html`<div class="aff-root">${loader()}</div>`);
+  const box = root.querySelector('.aff-root');
+  const userLine = (a, actions) => html`<div class="list-item">
+      ${avatar(a.user, 'md')}
+      <div class="li-text"><div class="li-head">${nameOf(a.user)}</div>
+        <div class="li-sub">@${a.user.handle}${a.label ? ` · ${a.label}` : ''}${a.status === 'pending' ? html` · <span class="tag">${t('Invited')}</span>` : ''}</div></div>
+      ${actions}</div>`;
+  const load = async () => {
+    let d;
+    try { d = await api('/affiliations'); } catch (e) { box.textContent = e.message; return; }
+    box.innerHTML = String(html`
+      <section class="card">
+        <h2 class="title-large emph">${t('Your affiliation')}</h2>
+        <p class="setting-sub">${t('An organization can invite you to show its badge next to your name. Nothing changes until you accept, and you can leave at any time.')}</p>
+        ${d.current ? html`<div class="seg tight">${userLine(d.current, html`<button class="btn tonal" type="button" data-leave="${d.current.id}">${t('Leave')}</button>`)}</div>`
+    : html`<p class="list-empty">${t('You’re not affiliated with an organization.')}</p>`}
+        ${d.invites.length ? html`<h3 class="title-medium emph">${t('Invitations')}</h3><div class="seg tight">${d.invites.map((a) => userLine(a, html`
+          <button class="btn filled" type="button" data-accept="${a.id}">${t('Accept')}</button>
+          <button class="btn text" type="button" data-leave="${a.id}">${t('Decline')}</button>`))}</div>` : ''}
+      </section>
+      ${d.org ? html`<section class="card">
+        <h2 class="title-large emph">${icon('apartment')} ${t('Your organization’s accounts')}</h2>
+        <p class="setting-sub">${t('Invite the accounts of people or teams that belong to your organization. They show your avatar as a badge once they accept.')}</p>
+        <form class="aff-add stack">
+          <div class="field"><input name="handle" maxlength="16" placeholder=" " autocomplete="off" autocapitalize="off"><label>${t('Handle')}</label></div>
+          <div class="field"><input name="label" maxlength="30" placeholder=" "><label>${t('Label (optional), e.g. Engineer')}</label></div>
+          <div class="row-end"><button class="btn filled" type="submit">${icon('person_add', 'sm')}${t('Invite')}</button></div>
+        </form>
+        <div class="seg tight">${d.members.length ? d.members.map((a) => userLine(a, html`<button class="icon-btn" type="button" data-leave="${a.id}" aria-label="${t('Remove')}">${icon('close')}</button>`))
+    : html`<p class="list-empty">${t('No affiliates yet')}</p>`}</div>
+      </section>` : html`<p class="setting-sub center">${t('Are you an organization? Ask an admin of this instance to mark your account as one.')}</p>`}`);
+  };
+  load();
+  root.addEventListener('click', async (e) => {
+    const acc = e.target.closest('[data-accept]');
+    const leave = e.target.closest('[data-leave]');
+    try {
+      if (acc) { await api(`/affiliations/${acc.dataset.accept}/accept`, { method: 'POST' }); toast(t('Affiliation added')); load(); }
+      if (leave) { await api(`/affiliations/${leave.dataset.leave}`, { method: 'DELETE' }); load(); }
+    } catch (err) { toast(err.message); }
+  });
+  root.addEventListener('submit', async (e) => {
+    if (!e.target.matches('.aff-add')) return;
+    e.preventDefault();
+    const f = e.target;
+    try {
+      await api('/affiliations', { method: 'POST', body: { handle: f.handle.value, label: f.label.value } });
+      toast(t('Invitation sent'));
+      load();
+    } catch (err) { toast(err.message); }
+  });
+  return { el: root, title: 'Affiliation' };
+}
+
+// ---------------------------------------------------------------- bots & API
+
+function developerPage() {
+  const me = state.me;
+  const root = page('Bots & API', html`
+    <section class="card">
+      <div class="setting">
+        <div><div class="title-medium">${icon('smart_toy', 'sm')} ${t('This is an automated account')}</div>
+          <div class="setting-sub">${t('Shows an “Automated” label next to the name, so people know a bot is posting.')}</div></div>
+        <input type="checkbox" class="switch" data-bot ${me.bot ? html`checked` : ''} aria-label="${t('This is an automated account')}">
+      </div>
+      <div class="field bot-owner" ${me.bot ? '' : html`hidden`}><input name="owner" maxlength="16" placeholder=" " value="${me.bot?.owner || ''}" autocapitalize="off">
+        <label>${t('Run by (handle, optional)')}</label></div>
+    </section>
+    <section class="card">
+      <h2 class="title-large emph">${t('API tokens')}</h2>
+      <p class="setting-sub">${t('Tokens let scripts and bots use your account through the API. Treat them like passwords: anyone with a token can act as you within its scopes.')}</p>
+      <div class="tokens seg tight">${loader('sm')}</div>
+      <form class="token-form stack">
+        <div class="field"><input name="name" maxlength="40" placeholder=" " required><label>${t('Token name, e.g. weather bot')}</label></div>
+        <div class="scope-row">
+          ${[['read', 'Read'], ['write', 'Post and interact'], ['messages', 'Direct messages']].map(([k, l]) => html`<label class="chip">
+            <input type="checkbox" class="checkbox" name="scope" value="${k}" ${k !== 'messages' ? html`checked` : ''}><span>${t(l)}</span></label>`)}
+        </div>
+        <div class="row-end"><button class="btn filled" type="submit">${icon('key', 'sm')}${t('Create token')}</button></div>
+      </form>
+    </section>
+    <a class="card settings-link" href="/developers">
+      <span class="li-icon">${icon('menu_book')}</span>
+      <div><div class="title-medium">${t('Developer docs')}</div><div class="setting-sub">${t('Endpoints, realtime events and example bots')}</div></div>
+      ${icon('chevron_right')}
+    </a>`);
+  const list = root.querySelector('.tokens');
+  const load = async () => {
+    try {
+      const { tokens } = await api('/tokens');
+      list.innerHTML = tokens.length ? String(html`${tokens.map((k) => html`<div class="list-item">
+        <span class="li-icon">${icon('key')}</span>
+        <div class="li-text"><div class="li-head">${k.name}</div>
+          <div class="li-sub">${k.prefix}… · ${k.scopes.join(', ')} · ${k.lastUsed ? t('Last used {time}', { time: relTime(k.lastUsed) }) : t('Never used')}</div></div>
+        <button class="btn text" type="button" data-revoke-token="${k.id}">${t('Revoke')}</button></div>`)}`)
+        : String(html`<p class="list-empty">${t('No tokens yet.')}</p>`);
+    } catch (e) { list.textContent = e.message; }
+  };
+  load();
+  const botSwitch = root.querySelector('[data-bot]');
+  const ownerField = root.querySelector('.bot-owner');
+  const saveBot = async () => {
+    try {
+      const { user } = await api('/me/bot', { method: 'PATCH', body: { bot: botSwitch.checked, owner: ownerField.querySelector('input').value } });
+      state.me = { ...state.me, bot: user.bot };
+      toast(t('Saved'));
+    } catch (err) { toast(err.message); }
+  };
+  botSwitch.addEventListener('change', () => { ownerField.hidden = !botSwitch.checked; saveBot(); });
+  ownerField.querySelector('input').addEventListener('change', saveBot);
+  root.querySelector('.token-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const scopes = [...f.querySelectorAll('[name=scope]:checked')].map((x) => x.value);
+    try {
+      const { token } = await api('/tokens', { method: 'POST', body: { name: f.name.value, scopes } });
+      f.reset();
+      load();
+      openDialog(html`<h2 class="dialog-title headline-small">${t('Your new token')}</h2>
+        <div class="dialog-body stack"><p class="body-medium">${t('Copy it now. For your security it won’t be shown again.')}</p>
+          <div class="dev-token">${token}</div></div>
+        <div class="dialog-actions"><button class="btn text" type="button" data-close>${t('Done')}</button>
+          <button class="btn filled" type="button" data-copy-token>${icon('content_copy', 'sm')}${t('Copy')}</button></div>`)
+        .dlg.querySelector('[data-copy-token]').addEventListener('click', () => navigator.clipboard?.writeText(token).then(() => toast(t('Copied'))));
+    } catch (err) { toast(err.message); }
+  });
+  list.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-revoke-token]');
+    if (!b) return;
+    if (!await confirmDialog({ title: t('Revoke this token?'), body: t('Anything using it will stop working.'), confirm: t('Revoke'), danger: true })) return;
+    try { await api(`/tokens/${b.dataset.revokeToken}`, { method: 'DELETE' }); load(); } catch (err) { toast(err.message); }
+  });
+  return { el: root, title: 'Bots & API' };
+}
+
 export async function settingsView({ section } = {}) {
   switch (section) {
     case undefined: case '': return indexPage();
@@ -646,6 +786,8 @@ export async function settingsView({ section } = {}) {
     case 'appearance': return appearancePage();
     case 'federation': return federationPage();
     case 'about': return aboutPage();
+    case 'affiliation': return affiliationPage();
+    case 'developer': return developerPage();
     default: {
       const e = new Error('Unknown settings page.'); e.status = 404; throw e;
     }

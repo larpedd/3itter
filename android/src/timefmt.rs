@@ -23,7 +23,7 @@ fn local(ms: i64) -> Local {
     Local { year: tm.tm_year + 1900, month: tm.tm_mon.clamp(0, 11) as usize, day: tm.tm_mday, hour: tm.tm_hour, minute: tm.tm_min }
 }
 
-const MONTHS: [(&str, [&str; 12]); 7] = [
+const MONTHS: [(&str, [&str; 12]); 12] = [
     ("en", ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]),
     ("pl", ["sty", "lut", "mar", "kwi", "maj", "cze", "lip", "sie", "wrz", "paź", "lis", "gru"]),
     ("de", ["Jan.", "Feb.", "März", "Apr.", "Mai", "Juni", "Juli", "Aug.", "Sept.", "Okt.", "Nov.", "Dez."]),
@@ -31,6 +31,11 @@ const MONTHS: [(&str, [&str; 12]); 7] = [
     ("fr", ["janv.", "févr.", "mars", "avr.", "mai", "juin", "juil.", "août", "sept.", "oct.", "nov.", "déc."]),
     ("pt", ["jan.", "fev.", "mar.", "abr.", "mai.", "jun.", "jul.", "ago.", "set.", "out.", "nov.", "dez."]),
     ("uk", ["січ.", "лют.", "бер.", "квіт.", "трав.", "черв.", "лип.", "серп.", "вер.", "жовт.", "лист.", "груд."]),
+    ("it", ["gen", "feb", "mar", "apr", "mag", "giu", "lug", "ago", "set", "ott", "nov", "dic"]),
+    ("nl", ["jan", "feb", "mrt", "apr", "mei", "jun", "jul", "aug", "sep", "okt", "nov", "dec"]),
+    ("tr", ["Oca", "Şub", "Mar", "Nis", "May", "Haz", "Tem", "Ağu", "Eyl", "Eki", "Kas", "Ara"]),
+    ("cs", ["led", "úno", "bře", "dub", "kvě", "čvn", "čvc", "srp", "zář", "říj", "lis", "pro"]),
+    ("ja", ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"]),
 ];
 
 fn month(m: usize) -> &'static str {
@@ -39,12 +44,16 @@ fn month(m: usize) -> &'static str {
 }
 
 fn day_month(t: &Local) -> String {
-    if i18n::language() == "en" { format!("{} {}", month(t.month), t.day) } else { format!("{} {}", t.day, month(t.month)) }
+    match i18n::language().as_str() {
+        "en" => format!("{} {}", month(t.month), t.day),
+        "ja" => format!("{}{}日", month(t.month), t.day),
+        _ => format!("{} {}", t.day, month(t.month)),
+    }
 }
 
 pub fn date(ms: i64) -> String {
     let t = local(ms);
-    format!("{} {}", day_month(&t), t.year)
+    if i18n::language() == "ja" { format!("{}年{}", t.year, day_month(&t)) } else { format!("{} {}", day_month(&t), t.year) }
 }
 
 pub fn rel(ms: i64) -> String {
@@ -68,4 +77,33 @@ pub fn rel(ms: i64) -> String {
 pub fn full(ms: i64) -> String {
     let t = local(ms);
     format!("{:02}:{:02} · {} {}", t.hour, t.minute, day_month(&t), t.year)
+}
+
+/// Milliseconds for a local date and time (month 1–12).
+pub fn local_ms(year: i32, month: i32, day: i32, hour: i32, minute: i32) -> i64 {
+    // SAFETY: mktime only reads/normalises the struct we own.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    tm.tm_year = year - 1900;
+    tm.tm_mon = month - 1;
+    tm.tm_mday = day;
+    tm.tm_hour = hour;
+    tm.tm_min = minute;
+    tm.tm_isdst = -1;
+    (unsafe { libc::mktime(&mut tm) }) as i64 * 1000
+}
+
+/// Local (year, month 1–12, day) `days` days from today.
+pub fn local_date(days: i64) -> (i32, i32, i32) {
+    let t = local(now_ms() + days * 86_400_000);
+    (t.year, t.month as i32 + 1, t.day)
+}
+
+pub fn local_hour() -> i32 {
+    local(now_ms()).hour
+}
+
+/// "Nov 2026" / "lis 2026" / "2026年11月", for "Joined …".
+pub fn month_year(ms: i64) -> String {
+    let t = local(ms);
+    if i18n::language() == "ja" { format!("{}年{}", t.year, month(t.month)) } else { format!("{} {}", month(t.month), t.year) }
 }

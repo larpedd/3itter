@@ -24,7 +24,7 @@ function userRef(ref) {
 function adminUser(u) {
   return {
     ...publicUser(u, u.id),
-    role: u.role, suspended: u.suspended, deletedAt: u.deleted_at,
+    role: u.role, suspended: u.suspended, deletedAt: u.deleted_at, isOrg: !!u.is_org,
     posts: get('SELECT COUNT(*) AS n FROM posts WHERE author_id = :id AND deleted = 0', { id: u.id }).n,
     openReports: get(`SELECT COUNT(*) AS n FROM reports WHERE target_id = :id AND status = 'open'`, { id: u.id }).n,
     lastActive: get('SELECT MAX(last_used) AS t FROM sessions WHERE user_id = :id', { id: u.id }).t,

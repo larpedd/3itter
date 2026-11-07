@@ -17,6 +17,7 @@ pub struct Store {
     pub instances: Vec<Instance>,
     pub current: Option<String>,
     pub cookies: BTreeMap<String, BTreeMap<String, String>>,
+    pub theme: String,
 }
 
 impl Store {
@@ -34,6 +35,7 @@ impl Store {
             }).filter(|i| !i.url.is_empty()).collect();
         }
         s.current = v["current"].as_str().map(str::to_string);
+        s.theme = v["theme"].as_str().unwrap_or("system").to_string();
         if let Some(map) = v["cookies"].as_object() {
             for (url, jar) in map {
                 let jar = jar.as_object().map(|o| o.iter().filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_string()))).collect())
@@ -49,6 +51,7 @@ impl Store {
             "instances": self.instances.iter().map(|i| json!({ "url": i.url, "name": i.name, "domain": i.domain })).collect::<Vec<_>>(),
             "current": self.current,
             "cookies": self.cookies,
+            "theme": self.theme,
         });
         let tmp = self.path.with_extension("tmp");
         if std::fs::write(&tmp, v.to_string()).is_ok() {

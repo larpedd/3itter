@@ -1,7 +1,7 @@
 // Request locale helpers: which device a post came from, the visitor's country
 // (from Cloudflare) and which interface language to suggest.
 
-export const LANGS = ['en', 'pl', 'de', 'es', 'fr', 'pt', 'uk'];
+export const LANGS = ['en', 'pl', 'de', 'es', 'fr', 'pt', 'uk', 'it', 'nl', 'tr', 'cs', 'ja'];
 
 // Device codes stored on posts and sessions. The web client renders them as "3itter for …".
 export const CLIENTS = ['android-app', 'iphone', 'ipad', 'android', 'windows', 'mac', 'linux', 'chromeos', 'web', 'api'];
@@ -16,6 +16,11 @@ const COUNTRY_LANG = {
   GA: 'fr', CG: 'fr', CD: 'fr', CM: 'fr', MG: 'fr', HT: 'fr',
   PT: 'pt', BR: 'pt', AO: 'pt', MZ: 'pt', CV: 'pt', GW: 'pt', ST: 'pt', TL: 'pt',
   UA: 'uk',
+  IT: 'it', SM: 'it', VA: 'it',
+  NL: 'nl', SR: 'nl', AW: 'nl', CW: 'nl', SX: 'nl',
+  TR: 'tr', CY: 'tr',
+  CZ: 'cs',
+  JP: 'ja',
 };
 
 // Two-letter country code of the visitor, when a trusted proxy (Cloudflare) supplies it.

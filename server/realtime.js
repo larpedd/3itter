@@ -51,3 +51,8 @@ export function publish(userId, event, data) {
     for (const res of set) { res.write(payload); res.write(badges); }
   });
 }
+
+// A post's link preview finished loading: tell its author's open tabs so the card appears.
+export function publishCardReady(userId, postId) {
+  if (userId) publish(userId, 'card', { postId });
+}

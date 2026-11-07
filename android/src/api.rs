@@ -182,6 +182,31 @@ impl Api {
         Ok(())
     }
 
+    /// Upload a file as the raw request body (POST /api/media/video).
+    pub fn upload(&self, path: &str, mime: &str, bytes: &[u8]) -> ApiResult {
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .timeout_global(Some(Duration::from_secs(600)))
+            .build()
+            .into();
+        let mut r = agent.post(format!("{}/api{}", self.base(), path))
+            .header("X-3itter-Client", "android")
+            .header("Content-Type", mime);
+        let cookie = self.cookie_header();
+        if !cookie.is_empty() {
+            r = r.header("Cookie", &cookie);
+        }
+        let mut resp = r.send(bytes).map_err(net_error)?;
+        let status = resp.status().as_u16();
+        let text = resp.body_mut().read_to_string().map_err(net_error)?;
+        let value: Value = serde_json::from_str(&text).unwrap_or(Value::Null);
+        if status >= 400 {
+            let message = value.get("error").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| format!("Upload failed ({status})"));
+            return Err(ApiError { status, message });
+        }
+        Ok(value)
+    }
+
     /// Raw bytes (images, the shared translation table).
     pub fn bytes(&self, url: &str, limit: u64) -> Result<Vec<u8>, ApiError> {
         let mut resp = self.agent.get(url).header("X-3itter-Client", "android").call().map_err(net_error)?;

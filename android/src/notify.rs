@@ -76,6 +76,34 @@ mod imp {
         Ok(())
     }
 
+    /// Open the system file picker (MainActivity.pickMedia). Results arrive in crate::picker.
+    pub fn pick_media(mime: &str, request: i32, multiple: bool) {
+        with_env(|env, ctx| {
+            let m = env.new_string(mime)?;
+            env.call_method(ctx, "pickMedia", "(Ljava/lang/String;IZ)V", &[JValue::Object(&m), JValue::Int(request), JValue::Bool(multiple as u8)])?;
+            Ok(())
+        });
+    }
+
+    pub fn open_url(url: &str) {
+        with_env(|env, ctx| {
+            let u = env.new_string(url)?;
+            env.call_method(ctx, "openUrl", "(Ljava/lang/String;)V", &[JValue::Object(&u)])?;
+            Ok(())
+        });
+    }
+
+    pub fn share_text(text: &str) -> bool {
+        let mut ok = false;
+        with_env(|env, ctx| {
+            let t = env.new_string(text)?;
+            env.call_method(ctx, "shareText", "(Ljava/lang/String;)V", &[JValue::Object(&t)])?;
+            ok = true;
+            Ok(())
+        });
+        ok
+    }
+
     /// Is the app on screen right now?
     pub fn in_foreground() -> bool {
         let mut focused = true;
@@ -138,6 +166,27 @@ mod imp {
 mod imp {
     pub fn in_foreground() -> bool {
         true
+    }
+    /// Desktop: ITTER_PICK=file1,file2 stands in for the system picker (used by the headless tests).
+    pub fn pick_media(_mime: &str, request: i32, _multiple: bool) {
+        let files = std::env::var("ITTER_PICK").unwrap_or_default();
+        for path in files.split(',').filter(|p| !p.is_empty()) {
+            if let Ok(bytes) = std::fs::read(path) {
+                let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+                let mime = match ext.as_str() {
+                    "png" => "image/png", "jpg" | "jpeg" => "image/jpeg", "gif" => "image/gif", "webp" => "image/webp",
+                    "mp4" => "video/mp4", "webm" => "video/webm", "mov" => "video/quicktime", _ => "",
+                };
+                crate::picker::push(request, mime.to_string(), bytes);
+            }
+        }
+        crate::picker::done(request);
+    }
+    pub fn open_url(url: &str) {
+        eprintln!("[open] {url}");
+    }
+    pub fn share_text(_text: &str) -> bool {
+        false
     }
     pub fn show(_id: i32, _channel: &str, title: &str, text: &str) {
         eprintln!("[notification] {title}: {text}");

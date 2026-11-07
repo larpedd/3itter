@@ -171,6 +171,15 @@ function userMenuItems(u, { onChange, onGone }) {
     { icon: 'info', label: 'Details', onSelect: () => openUserDetails(u, { onChange, onGone }) },
     { icon: 'person', label: 'View profile', onSelect: () => emit('navigate', `/u/${u.handle}`) },
     { icon: u.verified ? 'remove_moderator' : 'verified', label: u.verified ? 'Remove verification' : 'Verify', onSelect: () => update({ verified: !u.verified }, u.verified ? 'Verification removed' : `@${u.handle} is verified`) },
+    ...(local ? [{ icon: 'apartment', label: u.isOrg || u.org ? 'Remove organization status' : 'Make organization', onSelect: async () => {
+      const on = !(u.isOrg || u.org);
+      if (!on && !await confirmDialog({ title: `Remove organization status from @${u.handle}?`, body: 'All of its affiliations end.', confirm: 'Remove', danger: true })) return;
+      try {
+        await api(`/admin/users/${ref(u)}/org`, { method: 'PATCH', body: { org: on } });
+        onChange?.((await api(`/admin/users/${ref(u)}`)).user);
+        toast(on ? `@${u.handle} is now an organization` : 'Organization status removed');
+      } catch (err) { toast(err.message); }
+    } }] : []),
     ...(admin && local ? ['-',
       ...['user', 'moderator', 'admin'].filter((r) => r !== u.role).map((r) => ({
         icon: r === 'admin' ? 'shield_person' : r === 'moderator' ? 'shield' : 'person_remove',

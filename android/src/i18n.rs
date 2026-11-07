@@ -16,7 +16,7 @@ thread_local! {
     static CURRENT: RefCell<Option<usize>> = const { RefCell::new(None) };
 }
 
-pub const NAMES: [(&str, &str, &str); 7] = [
+pub const NAMES: [(&str, &str, &str); 12] = [
     ("en", "English", "English"),
     ("pl", "Polski", "Polish"),
     ("de", "Deutsch", "German"),
@@ -24,6 +24,11 @@ pub const NAMES: [(&str, &str, &str); 7] = [
     ("fr", "Français", "French"),
     ("pt", "Português", "Portuguese"),
     ("uk", "Українська", "Ukrainian"),
+    ("it", "Italiano", "Italian"),
+    ("nl", "Nederlands", "Dutch"),
+    ("tr", "Türkçe", "Turkish"),
+    ("cs", "Čeština", "Czech"),
+    ("ja", "日本語", "Japanese"),
 ];
 
 pub fn native_name(code: &str) -> String {
@@ -52,6 +57,22 @@ pub fn parse(src: &str) -> Table {
         }
     }
     t
+}
+
+/// Combine the main table with strings-extra.js (more languages, same keys).
+pub fn merge(mut main: Table, extra: Table) -> Table {
+    let n = main.langs.len();
+    let m = extra.langs.len();
+    main.langs.extend(extra.langs);
+    for row in main.rows.values_mut() { row.resize(n, String::new()); }
+    for (key, row) in extra.rows {
+        let entry = main.rows.entry(key).or_insert_with(|| vec![String::new(); n]);
+        entry.resize(n, String::new());
+        let mut row = row;
+        row.resize(m, String::new());
+        entry.extend(row);
+    }
+    main
 }
 
 pub fn install(table: Table) {

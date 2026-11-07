@@ -1,6 +1,6 @@
 // Interface translations.
 //
-// The dictionary (public/js/i18n/strings.js) maps the English UI text to its translations. Keys may hold
+// The dictionaries (public/js/i18n/strings.js and strings-extra.js) map the English UI text to its translations. Keys may hold
 // {placeholders} that match any text, e.g. 'No posts for “{q}”'. Strings built in JavaScript can call t(),
 // and a MutationObserver translates the rest of the UI as it is rendered: text nodes and the aria-label,
 // placeholder and title attributes. User content is never touched: anything inside translate="no"
@@ -14,6 +14,11 @@ export const LANGUAGES = [
   { code: 'fr', name: 'Français', english: 'French' },
   { code: 'pt', name: 'Português', english: 'Portuguese' },
   { code: 'uk', name: 'Українська', english: 'Ukrainian' },
+  { code: 'it', name: 'Italiano', english: 'Italian' },
+  { code: 'nl', name: 'Nederlands', english: 'Dutch' },
+  { code: 'tr', name: 'Türkçe', english: 'Turkish' },
+  { code: 'cs', name: 'Čeština', english: 'Czech' },
+  { code: 'ja', name: '日本語', english: 'Japanese' },
 ];
 const CODES = LANGUAGES.map((l) => l.code);
 const STORE_KEY = '3itter-lang';
@@ -158,7 +163,9 @@ export async function setLanguage(code) {
   document.documentElement.lang = lang;
   if (lang === 'en') { dict = null; patterns = []; observer?.disconnect(); return; }
   try {
-    const { LANGS, STRINGS } = await import('/js/i18n/strings.js');
+    // Languages live in one of two tables with the same layout (strings.js, strings-extra.js).
+    let { LANGS, STRINGS } = await import('/js/i18n/strings.js');
+    if (!LANGS.includes(lang)) ({ LANGS, STRINGS } = await import('/js/i18n/strings-extra.js'));
     const col = LANGS.indexOf(lang);
     compile(Object.fromEntries(Object.entries(STRINGS).map(([en, row]) => [en, row[col]])));
   } catch {

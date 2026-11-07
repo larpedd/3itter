@@ -36,6 +36,11 @@ for abi in $ABIS; do
   fi
 done
 
+# The small Java part: MainActivity (a NativeActivity subclass for the file picker) -> classes.dex.
+rm -rf build/classes build/dex && mkdir -p build/classes build/dex
+javac --release 8 -nowarn -classpath "$PLATFORM/android.jar" -d build/classes $(find java -name '*.java') 2>&1 | grep -v "^warning\|^Note\|^1 warning" || true
+"$BT/d8" --min-api $API --lib "$PLATFORM/android.jar" --output build/dex $(find build/classes -name '*.class')
+
 # Resources and manifest -> base APK, then add the native libraries.
 "$BT/aapt2" compile --dir res -o build/res.zip
 "$BT/aapt2" link -o build/base.apk --manifest AndroidManifest.xml -I "$PLATFORM/android.jar" build/res.zip --auto-add-overlay
@@ -47,6 +52,7 @@ with zipfile.ZipFile('build/unaligned.apk', 'a', zipfile.ZIP_DEFLATED) as z:
         for f in files:
             full = os.path.join(root, f)
             z.write(full, os.path.relpath(full, 'build/apk'))
+    z.write('build/dex/classes.dex', 'classes.dex')
 PY
 "$BT/zipalign" -f -P 16 4 build/unaligned.apk build/aligned.apk
 

@@ -4,7 +4,7 @@
 use crate::api::{Api, ApiError, J};
 use crate::store::{Instance, Store};
 use crate::{i18n, images, theme, timefmt};
-use crate::{AppState, AppWindow, Author, Conv, I18n, Lang, Message, Notif, Post, Profile, SavedInstance, Session, SheetItem, Theme, Trend, UserRow};
+use crate::{AppState, AppWindow, Author, ComposeImage, Conv, I18n, Lang, Message, Notif, Post, Profile, SavedInstance, Session, SheetItem, Theme, Trend, UserRow};
 use serde_json::{json, Value};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::cell::RefCell;
@@ -28,6 +28,11 @@ struct Models {
     languages: Rc<VecModel<Lang>>,
     instances: Rc<VecModel<SavedInstance>>,
     sheet: Rc<VecModel<SheetItem>>,
+    compose_images: Rc<VecModel<ComposeImage>>,
+    muted_words: Rc<VecModel<SharedString>>,
+    blocked: Rc<VecModel<UserRow>>,
+    muted: Rc<VecModel<UserRow>>,
+    about_rules: Rc<VecModel<SharedString>>,
 }
 
 impl Models {
@@ -57,6 +62,11 @@ struct App {
     compose_quote: Option<i64>,
     sheet_actions: Vec<Rc<dyn Fn()>>,
     toast_gen: u64,
+    compose_images: Vec<String>,       // data URLs, in the order shown
+    compose_video_id: Option<String>,
+    compose_upload_gen: u64,
+    schedule_at: Option<i64>,
+    schedule_date: Option<(i32, i32, i32)>,
     m: Models,
 }
 
@@ -139,7 +149,27 @@ fn author(u: &Value) -> Author {
     let letter: String = name.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().collect()).unwrap_or_else(|| "?".into());
     let (bg, fg) = theme::avatar_colors(u.i("hue"));
     let url = api.abs(&u.s("avatar"));
+    // Pride flags (PNG copies served by the instance) and the affiliation badge.
+    let flag_urls: Vec<String> = u["flags"].as_array().map(|a| a.iter().filter_map(|f| f.as_str())
+        .filter(|f| f.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')).take(4)
+        .map(|f| format!("{}/flags/png/{f}.png", api.base())).collect()).unwrap_or_default();
+    let flags: Vec<slint::Image> = flag_urls.iter().map(|f| images::get(f, 128)).collect();
+    let aff = &u["affiliation"];
+    let has_aff = aff.is_object() && !aff.s("handle").is_empty();
+    let aff_url = if has_aff { api.abs(&aff.s("avatar")) } else { String::new() };
+    let aff_name = if aff.s("name").is_empty() { aff.s("handle") } else { aff.s("name") };
     Author {
+        flags: ModelRc::new(VecModel::from(flags)),
+        flag_urls: flag_urls.join(" ").into(),
+        bot: u["bot"].is_object(),
+        has_aff,
+        aff_letter: aff_name.chars().find(|c| c.is_alphanumeric()).map(|c| c.to_uppercase().collect::<String>()).unwrap_or_default().into(),
+        aff_name: aff_name.into(),
+        aff_handle: aff.s("handle").into(),
+        aff_label: aff.s("label").into(),
+        aff_color: theme::oklch(0.55, 0.15, aff.i("hue") as f32),
+        aff_avatar: images::get(&aff_url, 96),
+        aff_url: aff_url.into(),
         name: name.into(),
         handle: handle.into(),
         letter: letter.into(),
@@ -196,6 +226,8 @@ fn post_row(p: &Value) -> Post {
         (String::new(), String::new())
     };
     let created = p.i("createdAt");
+    let card = &p["card"];
+    let card_image = if card.is_object() { api.abs(&card.s("image")) } else { String::new() };
     Post {
         id: p.i("id") as i32,
         author: author(&p["author"]),
@@ -222,6 +254,13 @@ fn post_row(p: &Value) -> Post {
         quote_text: quote_text.into(),
         quote_author: quote_author.into(),
         edited: p.i("editedAt") > 0,
+        card_url: card.s("url").into(),
+        card_title: card.s("title").chars().take(140).collect::<String>().into(),
+        card_site: card.s("site").into(),
+        card_desc: card.s("description").chars().take(160).collect::<String>().into(),
+        card_image: images::get(&card_image, 960),
+        card_image_url: card_image.into(),
+        card_large: card.b("large"),
     }
 }
 
@@ -257,6 +296,7 @@ fn notif_row(n: &Value) -> Notif {
         "follow" => ("person_add", "followed you"),
         "reply" => ("chat_bubble", "replied to you"),
         "mention" => ("alternate_email", "mentioned you"),
+        "affiliation" => ("apartment", "invited you to be affiliated with them"),
         _ => ("format_quote", "quoted your post"),
     };
     let post = &n["post"];
@@ -286,7 +326,15 @@ fn set_models<T: Clone + 'static>(model: &Rc<VecModel<T>>, rows: Vec<T>) {
 fn image_ready(url: &str) {
     let Some(img) = images::cached(url) else { return };
     let fix_author = |a: &mut Author| -> bool {
-        if a.avatar_url.as_str() == url { a.avatar = img.clone(); true } else { false }
+        let mut changed = false;
+        if a.avatar_url.as_str() == url { a.avatar = img.clone(); changed = true; }
+        if a.aff_url.as_str() == url { a.aff_avatar = img.clone(); changed = true; }
+        if a.flag_urls.split(' ').any(|f| f == url) {
+            let flags: Vec<slint::Image> = a.flag_urls.split(' ').filter(|f| !f.is_empty()).map(|f| images::cached(f).unwrap_or_default()).collect();
+            a.flags = ModelRc::new(VecModel::from(flags));
+            changed = true;
+        }
+        changed
     };
     let m = with(|a| {
         (a.m.post_models().map(|m| m.clone()), a.m.notifications.clone(), a.m.conversations.clone(),
@@ -299,6 +347,10 @@ fn image_ready(url: &str) {
             if p.image_url.as_str() == url {
                 p.image = img.clone();
                 p.image_ratio = images::ratio(url);
+                changed = true;
+            }
+            if p.card_image_url.as_str() == url {
+                p.card_image = img.clone();
                 changed = true;
             }
             if changed { model.set_row_data(i, p); }
@@ -441,8 +493,12 @@ fn open_instance(url: String) {
     bg(move |api| {
         let inst = api.call("GET", "/instance", None);
         let me = api.call("GET", "/me", None);
-        let strings = api.bytes(&format!("{}/js/i18n/strings.js", api.base()), 2 * 1024 * 1024).ok()
+        let fetch = |name: &str| api.bytes(&format!("{}/js/i18n/{name}", api.base()), 2 * 1024 * 1024).ok()
             .and_then(|b| String::from_utf8(b).ok()).map(|s| i18n::parse(&s));
+        let strings = match (fetch("strings.js"), fetch("strings-extra.js")) {
+            (Some(main), Some(extra)) => Some(i18n::merge(main, extra)),
+            (main, _) => main,
+        };
         (inst, me, strings)
     }, |(inst, me, strings)| {
         if let Some(tbl) = strings { i18n::install(tbl); }
@@ -457,6 +513,7 @@ fn open_instance(url: String) {
         let s = st();
         s.set_instance_name(inst.s("name").into());
         s.set_instance_domain(inst.s("domain").into());
+        s.set_instance_description(inst.s("description").into());
         s.set_registrations_open(inst.get("registrationsOpen").and_then(Value::as_bool).unwrap_or(true));
         with(|a| a.instance = inst);
         match me {
@@ -495,6 +552,11 @@ fn apply_language(user: Option<&Value>) {
     }
     let model = with(|a| a.m.languages.clone());
     set_models(&model, rows);
+    // Instance stats on the sign-in screen, in the new language.
+    let stats = with(|a| a.instance["stats"].clone());
+    s.set_instance_stats(if stats.is_object() {
+        format!("{} · {}", i18n::tf("{n} people so far", &[("n", &stats.i("users").to_string())]), i18n::tf("{n} posts", &[("n", &stats.i("posts").to_string())]))
+    } else { String::new() }.into());
 }
 
 fn signed_in(user: Value) {
@@ -504,6 +566,7 @@ fn signed_in(user: Value) {
     let s = st();
     s.set_me(author(&user));
     s.set_show_client(user["settings"].get("showClient").and_then(Value::as_bool).unwrap_or(true));
+    apply_settings(&user);
     s.set_error(SharedString::new());
     s.set_screen("main".into());
     with(|a| { a.stack.clear(); a.current = String::new(); });
@@ -702,6 +765,18 @@ fn show(key: &str) {
             load_sessions();
             s.set_page("sessions".into());
         }
+        "privacy" => {
+            load_privacy_lists();
+            s.set_page("privacy".into());
+        }
+        "edit-profile" => {
+            fill_edit_profile();
+            s.set_page("edit-profile".into());
+        }
+        "about" => {
+            fill_about();
+            s.set_page("about".into());
+        }
         other => s.set_page(other.into()),
     }
 }
@@ -772,7 +847,14 @@ fn load_more(which: String) {
 
 fn refresh() {
     let cur = with(|a| a.current.clone());
-    if cur == "home" { load_feed(true); } else { show(&cur); }
+    if cur == "home" {
+        let s = st();
+        s.set_scroll_top(s.get_scroll_top() + 1);
+        with(|a| a.feed_busy = false);
+        load_feed(true);
+    } else {
+        show(&cur);
+    }
     poll_badges();
 }
 
@@ -816,8 +898,7 @@ fn load_profile(handle: String) {
                 let me = with(|a| a.me.s("handle"));
                 let banner = with(|a| a.api.abs(&u.s("banner")));
                 BANNER.with(|b| *b.borrow_mut() = banner.clone());
-                let joined = timefmt::date(u.i("createdAt"));
-                let joined = joined.split(' ').skip(1).collect::<Vec<_>>().join(" ");
+                let joined = timefmt::month_year(u.i("createdAt"));
                 st().set_profile(Profile {
                     author: author(&u),
                     bio: u.s("bio").into(),
@@ -831,6 +912,8 @@ fn load_profile(handle: String) {
                     is_following: u.b("isFollowing"),
                     follows_you: u.b("followsYou"),
                     blocked: u.b("isBlocked") || u.b("blocksYou"),
+                    org: u.b("org"),
+                    bot_owner: u["bot"].s("owner").into(),
                     banner: images::get(&banner, 1280),
                     banner_color: theme::banner_color(u.i("hue")),
                 });
@@ -1112,7 +1195,8 @@ fn post_menu(id: i32) {
     let text = p.text.to_string();
     let handle = p.author.handle.to_string();
     let mut items: Vec<(&'static str, &'static str, bool, Rc<dyn Fn()>)> = vec![
-        ("link", "Copy link", false, Rc::new(move || share(id))),
+        ("link", "Copy link", false, Rc::new(move || copy_link(id))),
+        ("share", "Share", false, Rc::new(move || share(id))),
         ("edit", "Copy text", false, Rc::new(move || { ui().invoke_copy_text(text.clone().into()); toast(i18n::t("Text copied")); })),
         ("format_quote", "Quote post", false, Rc::new(move || quote(id))),
     ];
@@ -1142,15 +1226,42 @@ fn confirm_delete(id: i32) {
 
 fn share(id: i32) {
     let base = with(|a| a.api.base());
+    let link = format!("{base}/p/{id}");
+    if !crate::notify::share_text(&link) {
+        ui().invoke_copy_text(link.into());
+        toast(i18n::t("Link copied"));
+    }
+}
+
+fn copy_link(id: i32) {
+    let base = with(|a| a.api.base());
     ui().invoke_copy_text(format!("{base}/p/{id}").into());
     toast(i18n::t("Link copied"));
 }
 
 fn open_compose(reply: Option<i64>, quote_of: Option<i64>, context: String) {
-    with(|a| { a.compose_reply = reply; a.compose_quote = quote_of; });
+    with(|a| {
+        a.compose_reply = reply;
+        a.compose_quote = quote_of;
+        a.compose_images.clear();
+        a.compose_video_id = None;
+        a.compose_upload_gen += 1;
+        a.schedule_at = None;
+        a.m.compose_images.set_vec(vec![]);
+    });
     let s = st();
     s.set_compose_text(SharedString::new());
     s.set_compose_context(context.into());
+    s.set_compose_video(SharedString::new());
+    s.set_compose_poll(false);
+    for f in [AppState::set_poll_1, AppState::set_poll_2, AppState::set_poll_3, AppState::set_poll_4] { f(&s, SharedString::new()); }
+    s.set_poll_count(2);
+    s.set_poll_hours(24);
+    s.set_compose_cw_on(false);
+    s.set_compose_cw(SharedString::new());
+    s.set_compose_sensitive(false);
+    s.set_compose_policy("everyone".into());
+    s.set_compose_schedule(SharedString::new());
     push("compose".into());
 }
 
@@ -1165,18 +1276,35 @@ fn quote(id: i32) {
 }
 
 fn submit_post(text: String) {
-    if text.trim().is_empty() { return; }
-    let (reply, quote_of) = with(|a| (a.compose_reply, a.compose_quote));
-    let mut body = json!({ "text": text });
+    let s = st();
+    let (reply, quote_of, images, video, schedule_at) = with(|a| (a.compose_reply, a.compose_quote, a.compose_images.clone(), a.compose_video_id.clone(), a.schedule_at));
+    if text.trim().is_empty() && images.is_empty() && video.is_none() { return; }
+    let mut body = json!({ "text": text, "replyPolicy": s.get_compose_policy().to_string() });
     if let Some(r) = reply { body["replyTo"] = json!(r); }
     if let Some(q) = quote_of { body["quoteOf"] = json!(q); }
-    st().set_busy(true);
-    bg(move |api| api.call("POST", "/posts", Some(body)), move |r| {
+    if !images.is_empty() { body["images"] = json!(images.iter().map(|d| json!({ "data": d, "alt": "" })).collect::<Vec<_>>()); }
+    if let Some(v) = &video { body["video"] = json!({ "id": v, "alt": "" }); }
+    if s.get_compose_sensitive() && (!images.is_empty() || video.is_some()) { body["sensitive"] = json!(true); }
+    if s.get_compose_cw_on() && !s.get_compose_cw().trim().is_empty() { body["cw"] = json!(s.get_compose_cw().to_string()); }
+    if s.get_compose_poll() {
+        let opts: Vec<String> = [s.get_poll_1(), s.get_poll_2(), s.get_poll_3(), s.get_poll_4()].iter().take(s.get_poll_count() as usize)
+            .map(|o| o.trim().to_string()).filter(|o| !o.is_empty()).collect();
+        body["poll"] = json!({ "options": opts, "durationHours": s.get_poll_hours(), "multiple": false });
+    }
+    let scheduled = schedule_at.filter(|_| s.get_compose_schedule() != "" && reply.is_none());
+    if let Some(at) = scheduled { body["publishAt"] = json!(at); }
+    s.set_busy(true);
+    let path = if scheduled.is_some() { "/scheduled" } else { "/posts" };
+    bg(move |api| api.call("POST", path, Some(body)), move |r| {
         st().set_busy(false);
         match r {
             Ok(v) => {
                 st().set_compose_text(SharedString::new());
                 back();
+                if scheduled.is_some() {
+                    toast(i18n::t1("Scheduled for {when}", &timefmt::full(scheduled.unwrap())));
+                    return;
+                }
                 toast(i18n::t(if reply.is_some() { "Reply sent" } else { "Your post was sent" }));
                 if reply.is_none() {
                     let feed = with(|a| a.m.feed.clone());
@@ -1309,6 +1437,11 @@ pub fn run_with(data_dir: PathBuf, on_start: impl FnOnce(&AppWindow)) -> Result<
         languages: Rc::new(VecModel::default()),
         instances: Rc::new(VecModel::default()),
         sheet: Rc::new(VecModel::default()),
+        compose_images: Rc::new(VecModel::default()),
+        muted_words: Rc::new(VecModel::default()),
+        blocked: Rc::new(VecModel::default()),
+        muted: Rc::new(VecModel::default()),
+        about_rules: Rc::new(VecModel::default()),
     };
     let s = window.global::<AppState>();
     s.set_feed(m.feed.clone().into());
@@ -1326,6 +1459,11 @@ pub fn run_with(data_dir: PathBuf, on_start: impl FnOnce(&AppWindow)) -> Result<
     s.set_languages(m.languages.clone().into());
     s.set_instances(m.instances.clone().into());
     s.set_sheet(m.sheet.clone().into());
+    s.set_compose_images(m.compose_images.clone().into());
+    s.set_muted_words(m.muted_words.clone().into());
+    s.set_blocked(m.blocked.clone().into());
+    s.set_muted(m.muted.clone().into());
+    s.set_about_rules(m.about_rules.clone().into());
     s.set_version(env!("CARGO_PKG_VERSION").into());
 
     let store = Store::load(data_dir);
@@ -1350,6 +1488,11 @@ pub fn run_with(data_dir: PathBuf, on_start: impl FnOnce(&AppWindow)) -> Result<
         compose_quote: None,
         sheet_actions: vec![],
         toast_gen: 0,
+        compose_images: vec![],
+        compose_video_id: None,
+        compose_upload_gen: 0,
+        schedule_at: None,
+        schedule_date: None,
         m,
     }));
 
@@ -1424,6 +1567,9 @@ pub fn run_with(data_dir: PathBuf, on_start: impl FnOnce(&AppWindow)) -> Result<
         }
     });
 
+    let theme_mode = with(|a| a.store.theme.clone());
+    window.global::<Theme>().set_mode(if theme_mode.is_empty() { "system".into() } else { theme_mode.into() });
+    wire_extras(&s);
     refresh_instances();
     let current = with(|a| a.store.current.clone());
     match current {
@@ -1460,4 +1606,319 @@ fn follow_current() {
         }
     }
     follow_request(if now { "POST" } else { "DELETE" }, handle);
+}
+
+// ------------------------------------------------------------------ composer tools, settings
+
+const PICK_IMAGES: i32 = 1;
+const PICK_VIDEO: i32 = 2;
+const PICK_AVATAR: i32 = 3;
+const PICK_BANNER: i32 = 4;
+
+/// Prepare a picked picture for upload: GIFs stay as they are (animation), everything else is
+/// downscaled and re-encoded as JPEG. `crop` = width/height to centre-crop to (avatars, banners).
+fn encode_image(bytes: &[u8], mime: &str, max_w: u32, max_h: u32, crop: Option<f32>) -> Result<(String, slint::SharedPixelBuffer<slint::Rgba8Pixel>), String> {
+    use base64::Engine;
+    let img = image::load_from_memory(bytes).map_err(|_| i18n::t("That image couldn’t be opened."))?;
+    let img = match crop {
+        Some(r) => {
+            let (w, h) = (img.width() as f32, img.height() as f32);
+            let (cw, ch) = if w / h > r { (h * r, h) } else { (w, w / r) };
+            img.crop_imm(((w - cw) / 2.0) as u32, ((h - ch) / 2.0) as u32, cw as u32, ch as u32)
+        }
+        None => img,
+    };
+    let thumb = img.thumbnail(320, 320).to_rgba8();
+    let px = slint::SharedPixelBuffer::clone_from_slice(thumb.as_raw(), thumb.width(), thumb.height());
+    let data = if mime == "image/gif" && crop.is_none() && bytes.len() < 5 * 1024 * 1024 {
+        format!("data:image/gif;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes))
+    } else {
+        let img = if img.width() > max_w || img.height() > max_h { img.resize(max_w, max_h, image::imageops::FilterType::Lanczos3) } else { img };
+        let mut out = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 86)
+            .encode_image(&img.to_rgb8()).map_err(|e| e.to_string())?;
+        format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(&out))
+    };
+    Ok((data, px))
+}
+
+pub fn on_picked(request: i32, files: Vec<(String, Vec<u8>)>) {
+    if files.is_empty() { return; }
+    match request {
+        PICK_IMAGES => {
+            let room = 4usize.saturating_sub(with(|a| a.compose_images.len()));
+            for (mime, bytes) in files.into_iter().filter(|f| f.0.starts_with("image/") || f.0.is_empty()).take(room) {
+                bg(move |_| encode_image(&bytes, &mime, 1600, 1600, None), |r| match r {
+                    Ok((data, px)) => {
+                        let model = with(|a| { a.compose_images.push(data); a.m.compose_images.clone() });
+                        model.push(ComposeImage { image: slint::Image::from_rgba8(px) });
+                    }
+                    Err(e) => toast(e),
+                });
+            }
+        }
+        PICK_VIDEO => {
+            let Some((mime, bytes)) = files.into_iter().next() else { return };
+            let mime = if mime.is_empty() { "video/mp4".to_string() } else { mime };
+            if !["video/mp4", "video/webm", "video/quicktime"].contains(&mime.as_str()) {
+                return toast(i18n::t("Videos must be MP4, WebM or MOV."));
+            }
+            let gen = with(|a| { a.compose_upload_gen += 1; a.compose_video_id = None; a.compose_upload_gen });
+            let s = st();
+            s.set_compose_video("uploading".into());
+            s.set_compose_video_note(format!("{} · {:.1} MB", i18n::t("Uploading video…"), bytes.len() as f64 / 1_048_576.0).into());
+            let size = bytes.len();
+            bg(move |api| api.upload("/media/video", &mime, &bytes), move |r| {
+                if with(|a| a.compose_upload_gen) != gen { return; }
+                let s = st();
+                match r {
+                    Ok(v) => {
+                        with(|a| a.compose_video_id = Some(v["video"].s("id")));
+                        s.set_compose_video("ready".into());
+                        s.set_compose_video_note(format!("{:.1} MB", size as f64 / 1_048_576.0).into());
+                    }
+                    Err(e) => {
+                        s.set_compose_video("error".into());
+                        s.set_compose_video_note(e.message.into());
+                    }
+                }
+            });
+        }
+        PICK_AVATAR | PICK_BANNER => {
+            let Some((mime, bytes)) = files.into_iter().next() else { return };
+            let avatar = request == PICK_AVATAR;
+            st().set_busy(true);
+            bg(move |api| {
+                let (data, px) = if avatar { encode_image(&bytes, &mime, 512, 512, Some(1.0)) } else { encode_image(&bytes, &mime, 1500, 500, Some(3.0)) }
+                    .map_err(|e| crate::api::ApiError { status: 0, message: e })?;
+                let body = if avatar { json!({ "avatar": data }) } else { json!({ "banner": data }) };
+                api.call("PATCH", "/me", Some(body)).map(|v| (v, px))
+            }, move |r| {
+                st().set_busy(false);
+                match r {
+                    Ok((v, px)) => {
+                        let img = slint::Image::from_rgba8(px);
+                        if avatar {
+                            let mut me = st().get_me();
+                            me.avatar = img;
+                            st().set_me(me);
+                        } else {
+                            st().set_edit_banner(img);
+                        }
+                        with(|a| a.me = v["user"].clone());
+                        toast(i18n::t("Profile updated"));
+                    }
+                    Err(e) => fail(e),
+                }
+            });
+        }
+        _ => {}
+    }
+}
+
+fn compose_remove_image(i: i32) {
+    let model = with(|a| {
+        if (i as usize) < a.compose_images.len() { a.compose_images.remove(i as usize); }
+        a.m.compose_images.clone()
+    });
+    if (i as usize) < model.row_count() { model.remove(i as usize); }
+}
+
+fn compose_remove_video() {
+    with(|a| { a.compose_video_id = None; a.compose_upload_gen += 1; });
+    st().set_compose_video(SharedString::new());
+}
+
+fn compose_policy_menu() {
+    let set = |p: &'static str| Rc::new(move || st().set_compose_policy(p.into())) as Rc<dyn Fn()>;
+    open_sheet("Who can reply", vec![
+        ("public", "Everyone can reply", false, set("everyone")),
+        ("group", "People you follow can reply", false, set("following")),
+        ("alternate_email", "Only people you mention can reply", false, set("mentioned")),
+    ]);
+}
+
+fn set_schedule(at: i64) {
+    if at < timefmt::now_ms() + 60_000 {
+        return toast(i18n::t("Pick a time at least a minute from now."));
+    }
+    with(|a| a.schedule_at = Some(at));
+    st().set_compose_schedule(i18n::t1("Will post {when}", &timefmt::full(at)).into());
+}
+
+fn compose_schedule_menu() {
+    let tonight = if timefmt::local_hour() < 19 { 0 } else { 1 };
+    let at = |days: i64, h: i32| { let (y, m, d) = timefmt::local_date(days); timefmt::local_ms(y, m, d, h, 0) };
+    let mut items: Vec<(&'static str, &'static str, bool, Rc<dyn Fn()>)> = vec![
+        ("schedule", "In 1 hour", false, Rc::new(|| set_schedule(timefmt::now_ms() + 3_600_000))),
+        ("dark_mode", if tonight == 0 { "Tonight at 20:00" } else { "Tomorrow at 20:00" }, false, Rc::new(move || set_schedule(at(tonight, 20)))),
+        ("light_mode", "Tomorrow at 9:00", false, Rc::new(move || set_schedule(at(1, 9)))),
+        ("event", "Pick a date and time", false, Rc::new(|| st().set_compose_want_date(true))),
+    ];
+    if st().get_compose_schedule() != "" {
+        items.push(("close", "Don’t schedule", true, Rc::new(|| { with(|a| a.schedule_at = None); st().set_compose_schedule(SharedString::new()); })));
+    }
+    open_sheet("Schedule post", items);
+}
+
+fn apply_settings(user: &Value) {
+    let s = st();
+    let set = &user["settings"];
+    s.set_dm_policy(if set.s("dmPolicy").is_empty() { "everyone".into() } else { set.s("dmPolicy").into() });
+    s.set_discoverable(set.get("discoverable").and_then(Value::as_bool).unwrap_or(true));
+    let prefs = &set["notifPrefs"];
+    let p = |k: &str| prefs.get(k).and_then(Value::as_bool).unwrap_or(true);
+    s.set_notif_like(p("like"));
+    s.set_notif_repost(p("repost"));
+    s.set_notif_follow(p("follow"));
+    s.set_notif_reply(p("reply"));
+    s.set_notif_mention(p("mention"));
+    s.set_notif_quote(p("quote"));
+    let words: Vec<SharedString> = set["mutedWords"].as_array().map(|a| a.iter().filter_map(|w| w.as_str().map(SharedString::from)).collect()).unwrap_or_default();
+    let model = with(|a| a.m.muted_words.clone());
+    model.set_vec(words);
+}
+
+/// PATCH /me with `body`; on success the fresh user replaces ours.
+fn save_me(body: Value, ok: &'static str) {
+    bg(move |api| api.call("PATCH", "/me", Some(body)), move |r| match r {
+        Ok(v) => {
+            with(|a| a.me = v["user"].clone());
+            apply_settings(&v["user"]);
+            if !ok.is_empty() { toast(i18n::t(ok)); }
+        }
+        Err(e) => {
+            let me = with(|a| a.me.clone());
+            apply_settings(&me);
+            fail(e);
+        }
+    });
+}
+
+fn set_notif_pref(key: String, on: bool) {
+    let mut prefs = with(|a| a.me["settings"]["notifPrefs"].clone());
+    if !prefs.is_object() { prefs = json!({}); }
+    prefs[key.as_str()] = json!(on);
+    let s = st();
+    match key.as_str() {
+        "like" => s.set_notif_like(on), "repost" => s.set_notif_repost(on), "follow" => s.set_notif_follow(on),
+        "reply" => s.set_notif_reply(on), "mention" => s.set_notif_mention(on), _ => s.set_notif_quote(on),
+    }
+    save_me(json!({ "notifPrefs": prefs }), "");
+}
+
+fn muted_word(word: String, add: bool) {
+    let word = word.trim().to_lowercase();
+    if word.is_empty() { return; }
+    let mut words: Vec<String> = with(|a| a.m.muted_words.iter().map(|w| w.to_string()).collect());
+    if add { if !words.contains(&word) { words.insert(0, word); } } else { words.retain(|w| *w != word); }
+    save_me(json!({ "mutedWords": words }), "");
+}
+
+fn load_privacy_lists() {
+    bg(|api| (api.call("GET", "/me/blocks", None), api.call("GET", "/me/mutes", None)), |(b, m)| {
+        let (blocked, muted) = with(|a| (a.m.blocked.clone(), a.m.muted.clone()));
+        if let Ok(v) = b { blocked.set_vec(v["users"].as_array().map(|a| a.iter().map(user_row).collect::<Vec<_>>()).unwrap_or_default()); }
+        if let Ok(v) = m { muted.set_vec(v["users"].as_array().map(|a| a.iter().map(user_row).collect::<Vec<_>>()).unwrap_or_default()); }
+    });
+}
+
+fn undo_relation(handle: String, what: &'static str) {
+    bg(move |api| api.call("DELETE", &format!("/users/{}/{what}", enc(&handle)), None), move |r| match r {
+        Ok(_) => { toast(i18n::t(if what == "block" { "Unblocked" } else { "Unmuted" })); load_privacy_lists(); }
+        Err(e) => fail(e),
+    });
+}
+
+fn fill_edit_profile() {
+    let me = with(|a| a.me.clone());
+    let s = st();
+    s.set_edit_name(me.s("name").into());
+    s.set_edit_bio(me.s("bio").into());
+    s.set_edit_location(me.s("location").into());
+    s.set_edit_website(me.s("website").into());
+    s.set_edit_pronouns(me.s("pronouns").into());
+    let banner = with(|a| a.api.abs(&me.s("banner")));
+    s.set_edit_banner(images::get(&banner, 1280));
+}
+
+fn save_profile() {
+    let s = st();
+    let body = json!({
+        "name": s.get_edit_name().to_string(), "bio": s.get_edit_bio().to_string(), "location": s.get_edit_location().to_string(),
+        "website": s.get_edit_website().to_string(), "pronouns": s.get_edit_pronouns().to_string(),
+    });
+    s.set_busy(true);
+    bg(move |api| api.call("PATCH", "/me", Some(body)), |r| {
+        st().set_busy(false);
+        match r {
+            Ok(v) => {
+                with(|a| a.me = v["user"].clone());
+                st().set_me(author(&v["user"]));
+                toast(i18n::t("Profile updated"));
+                back();
+            }
+            Err(e) => fail(e),
+        }
+    });
+}
+
+fn change_password(current: String, next: String, confirm: String) {
+    if next != confirm { return toast(i18n::t("The new passwords don’t match.")); }
+    st().set_busy(true);
+    bg(move |api| api.call("POST", "/me/password", Some(json!({ "current": current, "next": next }))), |r| {
+        st().set_busy(false);
+        match r {
+            Ok(_) => { toast(i18n::t("Password updated. Other sessions were signed out.")); back(); }
+            Err(e) => fail(e),
+        }
+    });
+}
+
+fn fill_about() {
+    let inst = with(|a| a.instance.clone());
+    let s = st();
+    let rules: Vec<SharedString> = inst["rules"].as_array().map(|a| a.iter().filter_map(|r| r.as_str().map(SharedString::from)).collect()).unwrap_or_default();
+    let model = with(|a| a.m.about_rules.clone());
+    model.set_vec(rules);
+    s.set_about_contact(inst.s("contactEmail").into());
+    s.set_about_version(inst.s("version").into());
+}
+
+fn set_theme(mode: String) {
+    with(|a| { a.store.theme = mode.clone(); a.store.save(); });
+    ui().global::<Theme>().set_mode(mode.into());
+}
+
+fn wire_extras(s: &AppState) {
+    s.on_compose_pick_images(|| later(|| crate::notify::pick_media("image/*", PICK_IMAGES, true)));
+    s.on_compose_pick_video(|| later(|| crate::notify::pick_media("video/*", PICK_VIDEO, false)));
+    s.on_compose_remove_image(|i| later(move || compose_remove_image(i)));
+    s.on_compose_remove_video(|| later(compose_remove_video));
+    s.on_compose_policy_menu(|| later(compose_policy_menu));
+    s.on_compose_schedule_menu(|| later(compose_schedule_menu));
+    s.on_compose_set_date(|y, m, d| later(move || with(|a| a.schedule_date = Some((y, m, d)))));
+    s.on_compose_set_time(|h, mi| later(move || {
+        if let Some((y, m, d)) = with(|a| a.schedule_date) { set_schedule(timefmt::local_ms(y, m, d, h, mi)); }
+    }));
+    s.on_set_theme(|m| { let m = m.to_string(); later(move || set_theme(m)) });
+    s.on_set_dm_policy(|p| {
+        let p = p.to_string();
+        later(move || { st().set_dm_policy(p.clone().into()); save_me(json!({ "dmPolicy": p }), "Message settings saved"); })
+    });
+    s.on_set_discoverable(|on| later(move || { st().set_discoverable(on); save_me(json!({ "discoverable": on }), ""); }));
+    s.on_add_muted_word(|w| { let w = w.to_string(); later(move || muted_word(w, true)) });
+    s.on_remove_muted_word(|w| { let w = w.to_string(); later(move || muted_word(w, false)) });
+    s.on_unblock(|h| { let h = h.to_string(); later(move || undo_relation(h, "block")) });
+    s.on_unmute(|h| { let h = h.to_string(); later(move || undo_relation(h, "mute")) });
+    s.on_set_notif_pref(|k, on| { let k = k.to_string(); later(move || set_notif_pref(k, on)) });
+    s.on_save_profile(|| later(save_profile));
+    s.on_change_avatar(|| later(|| crate::notify::pick_media("image/*", PICK_AVATAR, false)));
+    s.on_change_banner(|| later(|| crate::notify::pick_media("image/*", PICK_BANNER, false)));
+    s.on_change_password(|c, n, f| { let (c, n, f) = (c.to_string(), n.to_string(), f.to_string()); later(move || change_password(c, n, f)) });
+    s.on_open_url(|u| { let u = u.to_string(); later(move || crate::notify::open_url(&u)) });
+    s.on_open_link(|path| {
+        let path = path.to_string();
+        later(move || { let base = with(|a| a.api.base()); crate::notify::open_url(&format!("{base}{path}")); })
+    });
 }
