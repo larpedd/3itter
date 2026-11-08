@@ -112,7 +112,7 @@ h1, h2, h3, p { margin: 0; }
 .topbar-sub { font: 400 13px/18px var(--md-font); color: var(--md-on-surface-variant); }
 .topbar-actions { display: flex; gap: 4px; }
 .topbar-extra { padding: 4px 0 4px; }
-.topbar-extra .btn-group { max-width: 420px; }
+/*.topbar-extra .btn-group { max-width: 420px; }*/
 .topbar .tabs { margin-top: 4px; border-bottom: 0; }
 .topbar-avatar { display: none; padding: 0; border: 0; background: none; cursor: pointer; margin-inline-start: 4px; }
 .thread-user { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; }
