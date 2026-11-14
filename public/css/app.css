@@ -1223,6 +1223,7 @@ body.drawer-open { overflow: hidden; }
 .cv-progress { position: absolute; left: 0; right: 0; bottom: 0; height: 6px; background: rgb(0 0 0 / .35); }
 .cv-progress span { display: block; height: 100%; width: 0; background: var(--md-primary); border-radius: 0 3px 3px 0; transition: width .2s linear; }
 .cv-status { position: absolute; left: 12px; bottom: 14px; padding: 4px 10px; border-radius: 10px; background: rgb(0 0 0 / .6); color: #fff; }
+.cv-retry { position: absolute; right: 12px; bottom: 12px; }
 .cv-alt { width: 100%; }
 
 .cropper-dialog { width: min(560px, 100vw); }

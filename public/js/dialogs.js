@@ -159,6 +159,7 @@ export function composer({ replyTo = null, quote = null, onPosted, autofocus = f
         <button type="button" class="icon-btn sm scrim ci-remove" data-c="remove-video" aria-label="Remove video">${icon('close', 'sm')}</button>
         <div class="cv-progress"><span></span></div>
         <div class="cv-status title-small"></div>
+        <button type="button" class="btn tonal xs cv-retry" data-c="retry-video" hidden>Retry upload</button>
       </div>
       <input class="ci-alt cv-alt" maxlength="1000" placeholder="Describe this video" aria-label="Video description (alt text)">`);
       grabPoster(videoBox.querySelector('video'));
@@ -168,6 +169,7 @@ export function composer({ replyTo = null, quote = null, onPosted, autofocus = f
     videoBox.querySelector('.cv-progress').hidden = !!v.id;
     videoBox.querySelector('.cv-status').textContent = v.error || (v.id ? '' : `${t('Uploading video…')} ${pct}%`);
     videoBox.querySelector('.cv-status').hidden = !v.error && !!v.id;
+    videoBox.querySelector('.cv-retry').hidden = !v.error || !!v.id;
     update();
   };
 
@@ -189,19 +191,22 @@ export function composer({ replyTo = null, quote = null, onPosted, autofocus = f
   };
 
   // Uploads v.file to /api/media/video and resolves `true` once it's stored (false on failure).
-  // Video media rows belong to the uploading account on the server, so the post-as flow re-runs this.
+  // The video's media row belongs to the uploading account, so when the composer posts as another
+  // signed-in account the request carries its id; `ownerId` records which account stored it.
   const uploadVideo = (v) => new Promise((resolve) => {
+    const author = st.postAs?.id ?? state.me.id;
     const xhr = new XMLHttpRequest();
     v.xhr = xhr;
     xhr.open('POST', '/api/media/video');
     xhr.setRequestHeader('Content-Type', v.file.type);
+    if (author !== state.me.id) xhr.setRequestHeader('X-3itter-Author', String(author));
     try { const c = localStorage.getItem('3itter-client'); if (c) xhr.setRequestHeader('X-3itter-Client', c); } catch { /* ignore */ }
     const finish = (ok) => { drawVideo(); resolve(ok); };
     xhr.upload.onprogress = (e) => { if (e.lengthComputable && st.video === v) { v.progress = e.loaded / e.total; drawVideo(); } };
     xhr.onload = () => {
       let data = {};
       try { data = JSON.parse(xhr.responseText); } catch { /* ignore */ }
-      if (xhr.status >= 200 && xhr.status < 300 && data.video) { v.id = data.video.id; v.error = null; }
+      if (xhr.status >= 200 && xhr.status < 300 && data.video) { v.id = data.video.id; v.error = null; v.ownerId = author; }
       else v.error = data.error || t('Upload failed. Try again.');
       finish(!!v.id);
     };
@@ -230,24 +235,25 @@ export function composer({ replyTo = null, quote = null, onPosted, autofocus = f
     drawVideo();
   };
 
+  // A failed upload keeps the file attached; re-send it without making people pick it again.
+  const retryVideo = () => {
+    const v = st.video;
+    if (!v || v.id || !v.error) return;
+    v.error = null; v.progress = 0;
+    drawVideo();
+    uploadVideo(v);
+  };
+
   // ------------------------------------------------ post as another account
-  // The avatar button picks one of the accounts signed in on this browser. On submit we briefly
-  // switch the session to that account, post, and switch back to where we were.
+  // The avatar button picks one of the accounts signed in on this browser. Writing requests from
+  // this composer carry the chosen account's id, which the server checks against those sessions;
+  // the browser's active session is never switched.
   const drawAvatar = () => {
     const a = st.postAs || state.me;
     avatarBtn.innerHTML = String(html`${avatar(a, 'md', { link: false })}${st.postAs ? html`<span class="composer-swap" aria-hidden="true">${icon('swap_horiz', 'sm')}</span>` : ''}`);
     const label = st.postAs ? `Posting as @${a.handle}. Choose account` : 'Choose the account to post as';
     avatarBtn.title = label;
     avatarBtn.setAttribute('aria-label', label);
-  };
-
-  const switchToAccount = async (id, tries = 3) => {
-    let err;
-    for (; tries > 0; tries--) {
-      try { return await api('/accounts/switch', { method: 'POST', body: { id } }); }
-      catch (e) { err = e; }
-    }
-    throw err;
   };
 
   const postAsPicker = async () => {
@@ -386,6 +392,7 @@ export function composer({ replyTo = null, quote = null, onPosted, autofocus = f
     if (c === 'image') file.click();
     if (c === 'video') videoFile.click();
     if (c === 'remove-video') { clearVideo(); st.sensitive = false; pressed('sensitive', false); }
+    if (c === 'retry-video') retryVideo();
     if (c === 'remove-image') { st.images.splice(Number(btn.dataset.i), 1); if (!st.images.length) { st.sensitive = false; pressed('sensitive', false); } drawImages(); }
     if (c === 'sensitive') { st.sensitive = !st.sensitive; pressed('sensitive', st.sensitive); toast(st.sensitive ? 'Images will be blurred until tapped' : 'Images won’t be blurred'); }
     if (c === 'cw') {
@@ -490,16 +497,13 @@ export function composer({ replyTo = null, quote = null, onPosted, autofocus = f
     e.preventDefault();
     if (submit.disabled) return;
     st.busy = true; progress.hidden = false; update();
-    const as = st.postAs;
-    const backId = as && as.id !== state.me.id ? state.me.id : null;
+    const asId = st.postAs?.id ?? null;
     try {
-      if (backId !== null) {
-        await switchToAccount(as.id);
-        if (st.video) { // the video was uploaded by the active account, so re-upload it as the author
-          const v = st.video;
-          v.id = null; v.error = null; v.progress = 0;
-          if (!await uploadVideo(v)) throw new Error(v.error || 'Video upload failed. Try again.');
-        }
+      // The video may have been uploaded before another account was chosen: upload it again as the author.
+      const v = st.video;
+      if (v && v.ownerId !== (asId ?? state.me.id)) {
+        v.id = null; v.error = null; v.progress = 0;
+        if (!await uploadVideo(v)) throw new Error(v.error || 'Video upload failed. Try again.');
       }
       const body = {
         text: ta.value,
@@ -512,7 +516,7 @@ export function composer({ replyTo = null, quote = null, onPosted, autofocus = f
         replyTo: replyTo?.id, quoteOf: quote?.id,
       };
       if (st.scheduleAt) {
-        const { scheduled } = await api('/scheduled', { method: 'POST', body: { ...body, publishAt: st.scheduleAt } });
+        const { scheduled } = await api('/scheduled', { method: 'POST', body: { ...body, publishAt: st.scheduleAt }, author: asId });
         reset();
         toast(`Scheduled for ${new Date(scheduled.publishAt).toLocaleString(locale(), { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`,
           { action: 'View', onAction: () => emit('navigate', '/scheduled') });
@@ -522,6 +526,7 @@ export function composer({ replyTo = null, quote = null, onPosted, autofocus = f
       const extra = st.thread.map((t) => t.trim()).filter(Boolean);
       const { post } = await api('/posts', {
         method: 'POST',
+        author: asId,
         body: {
           text: ta.value,
           images: st.images.length ? st.images.map((im) => ({ data: im.data, alt: im.alt })) : undefined,
@@ -538,7 +543,7 @@ export function composer({ replyTo = null, quote = null, onPosted, autofocus = f
       let prev = post;
       for (const text of extra) {
         try {
-          const { post: next } = await api('/posts', { method: 'POST', body: { text, replyTo: prev.id, replyPolicy: st.policy } });
+          const { post: next } = await api('/posts', { method: 'POST', author: asId, body: { text, replyTo: prev.id, replyPolicy: st.policy } });
           emit('post:created', next);
           prev = next;
         } catch (e) { toast(`Part of the thread wasn’t posted: ${e.message}`); break; }
@@ -549,10 +554,6 @@ export function composer({ replyTo = null, quote = null, onPosted, autofocus = f
       toast(err.message);
     } finally {
       st.busy = false; progress.hidden = true; update();
-      if (backId !== null) {
-        try { await switchToAccount(backId); }
-        catch { toast(`Couldn’t switch back to @${state.me.handle}. Switch accounts from the account menu.`); }
-      }
     }
   });
 
